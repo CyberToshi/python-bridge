@@ -48,6 +48,11 @@ func tick() -> void:
 		Phase.PIP:
 			if _pip_done():
 				_log.append("[PROV] Dependencies ok.")
+				# Verify that every configured dependency is actually importable
+				# in the venv (structured DEPENDENCY_ERROR on failure).
+				if not _verify_imports():
+					_fail("[PROV] Dependency verification failed. Details in log above.")
+					return
 				_finish(true)
 			elif now - _start_ms > 300000:
 				_fail("[PROV] pip install Timeout (300s). Log: " + _pip_log)
@@ -107,6 +112,28 @@ func _start_pip() -> void:
 		"-q", "-r", _req_file,
 	])
 	OS.create_process(_venv_py, args)
+
+## Verifies that the configured dependencies can be imported with the venv
+## Python. Uses a short, blocking OS.execute call - this is acceptable here
+## because provisioning runs once at startup and never on the hot path.
+## Returns true when every dependency imports, false otherwise.
+func _verify_imports() -> bool:
+	var deps: Array = _cfg.get("dependencies", [])
+	if deps.is_empty():
+		return true
+	var ok := true
+	for dep in deps:
+		var mod := str(dep).split("==")[0].split(">=")[0].split("<")[0].strip_edges()
+		if mod == "":
+			continue
+		var out: Array = []
+		var exit_code := OS.execute(_venv_py, PackedStringArray([
+			"-c", "import importlib; importlib.import_module(%s)" % JSON.stringify(mod)]),
+			out, true)
+		if exit_code != 0:
+			ok = false
+			_log.append("[PROV] FEHLT: dependency '%s' konnte nicht importiert werden" % mod)
+	return ok
 
 func _pip_done() -> bool:
 	var sp := _site_packages()

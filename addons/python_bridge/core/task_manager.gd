@@ -249,6 +249,15 @@ func fail_tasks(tasks: Array, instance_id: String, err: Dictionary) -> void:
 			_finish(task, PythonBridgeResult.failed_with_error(
 				err, task.id, instance_id))
 
+## Fails all QUEUED tasks targeting an instance (e.g. explicit instance was
+## stopped). Running tasks are not touched.
+func fail_queued_for(instance_id: String, err: Dictionary) -> void:
+	for i in range(_queue.size() - 1, -1, -1):
+		var task: PythonBridgeTask = _queue[i]
+		if task.instance_id == instance_id:
+			_queue.remove_at(i)
+			_finish(task, PythonBridgeResult.failed_with_error(err, task.id, instance_id))
+
 ## Fails all RUNNING tasks of an instance (crash / disconnect). The scheduler
 ## calls this when an instance dies so no task hangs forever.
 func fail_in_flight(instance_id: String, err: Dictionary) -> void:
