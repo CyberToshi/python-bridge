@@ -273,13 +273,19 @@ async def run(host, port, tmpdir, tag):
         print("[python_bridge] %s listens on ws://127.0.0.1:%d (pid=%d)" %
               (tag, real_port, os.getpid()), flush=True)
 
-        saw_connection = False
+        # Grace period before exiting after the connection drops: the client
+        # may reconnect (transient blip). Only exit for good when no new
+        # connection arrived within the grace period - prevents zombies after
+        # a Godot crash without killing legitimate reconnects.
+        grace_seconds = 5.0
+        disconnected_at = None
         while not state["shutdown"]:
             await asyncio.sleep(0.1)
             if state["connections"] > 0:
-                saw_connection = True
-            if saw_connection and state["connections"] <= 0:
-                # Godot closed the connection (crash/stop) without SHUTDOWN.
+                disconnected_at = None
+            elif disconnected_at is None:
+                disconnected_at = asyncio.get_running_loop().time()
+            elif asyncio.get_running_loop().time() - disconnected_at > grace_seconds:
                 break
         server.close()
         await server.wait_closed()

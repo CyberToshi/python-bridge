@@ -165,12 +165,14 @@ func tick_windows(_now_ms: int) -> void:
 		for task in _queue:
 			if tasks.size() + joined.size() >= max_size:
 				break
-			if task.priority != win_priority:
-				continue
-			if not task.batchable or task._next_attempt_ms > 0:
-				continue
 			if not _targets(task, instance_id):
 				continue
+			if task.priority != win_priority:
+				continue
+			# A non-batchable / delayed task of the same priority blocks further
+			# joining: joining later tasks would violate submission order.
+			if not task.batchable or task._next_attempt_ms > 0:
+				break
 			joined.append(task)
 		for task in joined:
 			_queue.erase(task)
@@ -236,6 +238,15 @@ func _resolve_single(task_id: String, msg: Dictionary) -> void:
 		_requeue(task)
 		return
 	_finish(task, PythonBridgeResult.failed_with_error(err, task_id, task.instance_id))
+
+## Removes terminal tasks that finished long ago from the registry (memory
+## hygiene). Keeps `done` results retrievable for a grace period. Called by
+## the scheduler at a low cadence.
+func prune_terminal(now_ms: int, keep_ms: int = 60000) -> void:
+	for task_id in _by_id.keys():
+		var task := _by_id[task_id] as PythonBridgeTask
+		if task.is_terminal() and now_ms - task.created_at_ms - task.timeout_ms > keep_ms:
+			_by_id.erase(task_id)
 
 ## Fails a specific set of tasks (send errors etc.). Retry policy applies.
 func fail_tasks(tasks: Array, instance_id: String, err: Dictionary) -> void:

@@ -110,8 +110,11 @@ def _unparse(node):
         return ""
 
 
-def _repr(value):
+def _repr(node):
+    """Stringifies an AST default node (e.g. Constant(2) -> "2")."""
+    if node is None:
+        return ""
     try:
-        return repr(value)
+        return ast.unparse(node).strip()
     except Exception:  # pragma: no cover
         return ""

@@ -21,8 +21,12 @@ func start(command: PackedStringArray) -> bool:
 func is_running() -> bool:
 	if pid <= 0:
 		return false
-	# Only safe for PIDs we spawned ourselves (OS limitation).
-	return OS.is_process_running(pid)
+	# Only safe for PIDs we spawned ourselves (OS limitation). Falls back to
+	# "running" when the API is unavailable so callers still force-kill after
+	# their timeout (no zombie risk).
+	if OS.has_method("is_process_running"):
+		return OS.is_process_running(pid)
+	return true
 
 func get_exit_code() -> int:
 	if pid <= 0:

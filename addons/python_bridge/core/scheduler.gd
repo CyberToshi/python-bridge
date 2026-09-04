@@ -29,6 +29,7 @@ var _on_event: Callable = Callable()              # (instance_id, event_msg) -> 
 var _inbox: Array = []                            # [{instance_id, parsed}]
 var _in_flight_units: Dictionary = {}             # instance -> Array of units
 var _warned_inbox: bool = false
+var _last_prune_ms: int = 0
 
 func _init(cfg: Dictionary) -> void:
 	_cfg = cfg
@@ -142,7 +143,8 @@ func _prune_units() -> void:
 			var all_done := true
 			for tid in unit.get("task_ids", []):
 				var task := _task_manager.get_task(tid)
-				if task == null or not task.is_terminal():
+				# A missing task counts as done (it was pruned after finishing).
+				if task != null and not task.is_terminal():
 					all_done = false
 					break
 			if all_done:
@@ -163,6 +165,10 @@ func _process_inbox() -> void:
 
 # ------------------------------------------------------------------ Timeouts
 func _check_timeouts(now_ms: int) -> void:
+	# Low-cadence registry cleanup (memory hygiene, no leaks from old tasks).
+	if now_ms - _last_prune_ms > 10000:
+		_last_prune_ms = now_ms
+		_task_manager.prune_terminal(now_ms)
 	var timed_out: Array = _task_manager.check_timeouts(now_ms)
 	for task_id in timed_out:
 		var task := _task_manager.get_task(task_id)

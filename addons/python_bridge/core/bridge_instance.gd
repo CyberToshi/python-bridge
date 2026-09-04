@@ -154,6 +154,9 @@ func tick() -> void:
 				_handle_message(parsed)
 			if state == State.READY:
 				_tick_health(now)
+				# A health failure already crashed us; do not double-crash.
+				if state != State.READY:
+					return
 				# Secondary crash signal: subprocess died without closing WS.
 				if _process and not _process.is_running():
 					_on_crash(PythonBridgeErrorHandler.make(
@@ -291,11 +294,15 @@ func stop() -> void:
 func _finish_shutdown(now_ms: int) -> void:
 	var timeout := int(_settings.get("shutdown_timeout_ms", 3000))
 	var done := false
-	if _shutdown_ack_received:
-		done = true
 	if not done and _client:
+		# Keep polling so the SHUTDOWN_ACK arrives instead of waiting for the
+		# full timeout.
 		_client.poll()
-		if not _client.is_open():
+		for parsed in _client.drain():
+			_handle_message(parsed)
+		if _shutdown_ack_received:
+			done = true
+		elif not _client.is_open():
 			done = true
 	if not done and _process and not _process.is_running():
 		done = true
