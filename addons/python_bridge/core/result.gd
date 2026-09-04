@@ -57,6 +57,16 @@ static func failed_with_error(err: Dictionary, task_id := "", instance_id := "")
 	result.instance_id = instance_id
 	return result
 
+## Builds a cancelled result (status "cancelled", TASK_ERROR category).
+static func cancelled(task_id := "") -> PythonBridgeResult:
+	var result := PythonBridgeResult.new()
+	result.ok = false
+	result.status = "cancelled"
+	result.error = PythonBridgeErrorHandler.make(
+		PythonBridgeErrorHandler.CATEGORY_TASK_ERROR, "Task cancelled", task_id)
+	result.task_id = task_id
+	return result
+
 ## Legacy constructor: builds a failure from a status string + message.
 static func failed(status: String, message: String = "", err := {}) -> PythonBridgeResult:
 	var result := PythonBridgeResult.new()
