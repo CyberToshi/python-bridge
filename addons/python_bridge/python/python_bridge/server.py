@@ -1,117 +1,287 @@
-"""WebSocket-Server, eine Instanz = ein Prozess = eine ScriptHost.
+"""WebSocket server, one instance = one process = one ScriptHost.
 
-Jede Python-Instanz führt einen eigenen Server aus. Godot liest Port+PID aus
-einer Tmp-Datei, verbindet sich und sendet Requests (`execute`, `ping`,
-`shutdown`). Antworten werden über dasselbe `id`-Feld zugeordnet.
+Godot reads port+pid from a tmp file, connects and sends messages. The
+asyncio loop stays responsive during long-running user code: control
+messages (ping, hello, cancel, reload, introspect, shutdown) are handled
+inline by the reader task, while task/batch messages are executed in a
+single worker thread (one job at a time per instance) so contexts stay
+sequential and race-free.
+
+Timeout semantics: `timeout_ms` per task/batch is enforced with
+asyncio.wait_for. A timed-out task keeps running in the worker thread
+(it cannot be killed safely) but its result is discarded; the client-side
+TaskManager already marked the task TIMEOUT.
 """
+
 import asyncio
 import json
 import os
 import sys
-import traceback
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import websockets
 
-from . import protocol, executor
+from . import protocol, executor, introspection
+from .serializer import encode_obj
 
-VERSION = "0.1.0"
-
-
-def _result_message(msg_id, status, data=None, error=None, ms=0):
-    msg = {"v": protocol.PROTOCOL_VERSION, "type": "response",
-           "id": msg_id, "status": status, "ms": ms}
-    if status == "ok":
-        msg["data"] = data
-    else:
-        msg["error"] = error
-    return msg
+VERSION = "0.2.0"
 
 
-async def _route(ws, host, message, data):
-    mtype = message.get("type")
-    msg_id = message.get("id")
-
-    if mtype == "ping":
-        await ws.send(protocol.build_text(
-            {"v": protocol.PROTOCOL_VERSION, "type": "pong", "id": msg_id}))
-        return
-
-    if mtype == "hello":
-        await ws.send(protocol.build_text({
-            "v": protocol.PROTOCOL_VERSION, "type": "hello_ack", "id": msg_id,
-            "pid": os.getpid(), "bridge_version": VERSION}))
-        return
-
-    if mtype == "shutdown":
-        await ws.send(protocol.build_text(
-            _result_message(msg_id, "ok", data="bye")))
-        raise SystemExit(0)
-
-    if mtype == "execute":
-        context_id = message.get("context", "anon")
-        source = message.get("source", "")
-        command = message.get("command", "run")
-        try:
-            from . import serializer
-
-            if command == "call":
-                args = [serializer.decode_obj(x, []) for x in message.get("args", [])]
-                kwargs = {
-                    k: serializer.decode_obj(v, [])
-                    for k, v in (message.get("kwargs") or {}).items()
-                }
-                result, err = host.call(context_id, source,
-                                        message.get("function", ""), args, kwargs)
-            else:
-                input_data = serializer.decode_obj(message.get("input"), [])
-                result, err = host.run(context_id, source, input_data)
-        except Exception as exc:  # Infrastruktur-Fehler (nicht Nutzer-Code)
-            result, err = None, {
-                "type": type(exc).__name__, "message": str(exc),
-                "traceback": traceback.format_exc(),
-            }
-
-        if err is not None:
-            await ws.send(protocol.build_text(_result_message(msg_id, "error", error=err)))
-        else:
-            chunks = []
-            from . import serializer
-            encoded = serializer.encode_obj(result, chunks)
-            head = _result_message(msg_id, "ok", data=encoded, ms=0)
-            if chunks:
-                header = json.dumps(head)
-                await ws.send(protocol.build_binary(header, chunks))
-            else:
-                await ws.send(protocol.build_text(head))
-        return
-
-    await ws.send(protocol.build_text(_result_message(
-        msg_id, "error",
-        error={"type": "ProtocolError",
-               "message": "Unbekannter Typ: %s" % mtype, "traceback": ""})))
+async def _send_text(ws, lock, message):
+    async with lock:
+        await ws.send(protocol.build_text(message))
 
 
-async def _handle_connection(ws):
+async def _send_frame(ws, lock, frame):
+    async with lock:
+        await ws.send(frame)
+
+
+def _task_error_body(msg_id, code, message, ms=0):
+    return protocol.build_response(
+        protocol.MSG_TASK_ERROR, msg_id, "error",
+        error={"code": code, "type": code, "message": message, "traceback": ""},
+        ms=ms)
+
+
+def _encode_with_chunks(value, chunks):
+    """Encodes a value into JSON-compatible form, appending binary chunks."""
+    return encode_obj(value, chunks)
+
+
+async def _handle_connection(ws, state):
+    """Reader task: control messages inline, task/batch enqueued."""
     host = executor.ScriptHost()
-    async for raw in ws:
-        message, data = protocol.parse(raw)
-        await _route(ws, host, message, data)
+    executor_pool = ThreadPoolExecutor(max_workers=1)
+    job_queue = asyncio.Queue()
+    send_lock = asyncio.Lock()
+    loop = asyncio.get_running_loop()
+
+    state["connections"] += 1
+    try:
+        # Worker task: consumes the job queue, runs user code, responds.
+        async def _worker():
+            while True:
+                message = await job_queue.get()
+                if state["shutdown"]:
+                    return
+                await _run_job(ws, send_lock, loop, executor_pool, host, message)
+
+        worker_task = asyncio.create_task(_worker())
+
+        try:
+            async for raw in ws:
+                message, data = protocol.parse(raw)
+                if not isinstance(message, dict) or message.get("type") == "malformed":
+                    continue
+                mtype = message.get("type")
+                msg_id = message.get("id", "")
+
+                if mtype == protocol.MSG_PING:
+                    await _send_text(ws, send_lock, {
+                        "v": protocol.PROTOCOL_VERSION,
+                        "type": protocol.MSG_PONG,
+                        "id": msg_id,
+                    })
+                elif mtype == protocol.MSG_HELLO:
+                    await _send_text(ws, send_lock, {
+                        "v": protocol.PROTOCOL_VERSION,
+                        "type": protocol.MSG_HELLO_ACK,
+                        "id": msg_id,
+                        "pid": os.getpid(),
+                        "bridge_version": VERSION,
+                    })
+                elif mtype == protocol.MSG_CANCEL:
+                    host.mark_cancelled(str(message.get("target_id", "")))
+                    await _send_text(ws, send_lock, {
+                        "v": protocol.PROTOCOL_VERSION,
+                        "type": protocol.MSG_CANCEL_ACK,
+                        "id": msg_id,
+                        "target_id": message.get("target_id", ""),
+                    })
+                elif mtype == protocol.MSG_RELOAD:
+                    context = str(message.get("context", "anon"))
+                    source = str(message.get("source", ""))
+                    result, err = host.reload_context(context, source)
+                    if err is None:
+                        await _send_text(ws, send_lock, {
+                            "v": protocol.PROTOCOL_VERSION,
+                            "type": protocol.MSG_RELOAD_ACK,
+                            "id": msg_id,
+                            "status": "ok",
+                        })
+                    else:
+                        await _send_text(ws, send_lock, protocol.build_response(
+                            protocol.MSG_RELOAD_ACK, msg_id, "error", error=err))
+                elif mtype == protocol.MSG_INTROSPECT:
+                    await _handle_introspect(ws, send_lock, message, msg_id)
+                elif mtype == protocol.MSG_SHUTDOWN:
+                    await _send_text(ws, send_lock, {
+                        "v": protocol.PROTOCOL_VERSION,
+                        "type": protocol.MSG_SHUTDOWN_ACK,
+                        "id": msg_id,
+                        "status": "ok",
+                    })
+                    state["shutdown"] = True
+                    await ws.close()
+                    return
+                elif mtype in (protocol.MSG_TASK, protocol.MSG_BATCH):
+                    await job_queue.put(message)
+                else:
+                    await _send_text(ws, send_lock, protocol.build_response(
+                        protocol.MSG_TASK_ERROR, msg_id, "error",
+                        error={"code": protocol.CATEGORY_PROTOCOL_ERROR,
+                               "type": "ProtocolError",
+                               "message": "Unknown message type: %s" % mtype,
+                               "traceback": ""}))
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
+            executor_pool.shutdown(wait=False, cancel_futures=True)
+    finally:
+        state["connections"] -= 1
+
+
+async def _run_job(ws, send_lock, loop, executor_pool, host, message):
+    """Runs one task or batch message in the worker thread and responds."""
+    msg_id = str(message.get("id", ""))
+    timeout_ms = int(message.get("timeout_ms", 0) or 0)
+    timeout = timeout_ms / 1000.0 if timeout_ms > 0 else None
+
+    if message.get("type") == protocol.MSG_BATCH:
+        items = message.get(protocol.FIELD_ITEMS, [])
+        try:
+            bodies = await asyncio.wait_for(
+                loop.run_in_executor(
+                    executor_pool,
+                    lambda: [host.execute_job(item) for item in items]),
+                timeout)
+        except asyncio.TimeoutError:
+            await _send_text(ws, send_lock, _task_error_body(
+                msg_id, protocol.CATEGORY_TIMEOUT_ERROR,
+                "Batch timeout after %d ms" % timeout_ms))
+            return
+        chunks = []
+        out_items = []
+        for item, body in zip(items, bodies):
+            item_id = str(item.get("id", ""))
+            entry = {"id": item_id, "ms": body["ms"],
+                     "stdout": body.get("stdout", ""), "stderr": body.get("stderr", "")}
+            if body["status"] == "ok":
+                entry["status"] = "ok"
+                entry["data"] = _encode_with_chunks(body["data"], chunks)
+            else:
+                entry["status"] = "error"
+                entry["error"] = body.get("error") or {
+                    "code": protocol.CATEGORY_TASK_ERROR,
+                    "type": "Error", "message": "unknown", "traceback": ""}
+            out_items.append(entry)
+        head = {"v": protocol.PROTOCOL_VERSION, "type": protocol.MSG_BATCH_RESULT,
+                "id": msg_id, "items": out_items}
+        if chunks:
+            await _send_frame(ws, send_lock, protocol.build_binary(
+                json.dumps(head), chunks))
+        else:
+            await _send_text(ws, send_lock, head)
+        return
+
+    # Single task
+    try:
+        body = await asyncio.wait_for(
+            loop.run_in_executor(executor_pool, host.execute_job, message),
+            timeout)
+    except asyncio.TimeoutError:
+        await _send_text(ws, send_lock, _task_error_body(
+            msg_id, protocol.CATEGORY_TIMEOUT_ERROR,
+            "Task timeout after %d ms" % timeout_ms))
+        return
+
+    if body["status"] == "ok":
+        chunks = []
+        encoded = _encode_with_chunks(body["data"], chunks)
+        head = protocol.build_response(
+            protocol.MSG_TASK_RESULT, msg_id, "ok", data=encoded, ms=body["ms"])
+        head["stdout"] = body.get("stdout", "")
+        head["stderr"] = body.get("stderr", "")
+        if chunks:
+            await _send_frame(ws, send_lock, protocol.build_binary(
+                json.dumps(head), chunks))
+        else:
+            await _send_text(ws, send_lock, head)
+    else:
+        head = protocol.build_response(
+            protocol.MSG_TASK_ERROR, msg_id, "error",
+            error=body.get("error") or {
+                "code": protocol.CATEGORY_TASK_ERROR,
+                "type": "Error", "message": "unknown", "traceback": ""},
+            ms=body["ms"])
+        head["stdout"] = body.get("stdout", "")
+        head["stderr"] = body.get("stderr", "")
+        await _send_text(ws, send_lock, head)
+
+
+async def _handle_introspect(ws, send_lock, message, msg_id):
+    source = str(message.get("source", ""))
+    try:
+        schema = introspection.analyze(source)
+        await _send_text(ws, send_lock, {
+            "v": protocol.PROTOCOL_VERSION,
+            "type": protocol.MSG_INTROSPECT_RESULT,
+            "id": msg_id,
+            "status": "ok",
+            "functions": schema["functions"],
+        })
+    except SyntaxError as exc:
+        await _send_text(ws, send_lock, {
+            "v": protocol.PROTOCOL_VERSION,
+            "type": protocol.MSG_INTROSPECT_RESULT,
+            "id": msg_id,
+            "status": "error",
+            "error": {"code": protocol.CATEGORY_PYTHON_EXCEPTION,
+                      "type": "SyntaxError", "message": str(exc),
+                      "traceback": ""},
+        })
+    except Exception as exc:  # noqa: BLE001
+        await _send_text(ws, send_lock, {
+            "v": protocol.PROTOCOL_VERSION,
+            "type": protocol.MSG_INTROSPECT_RESULT,
+            "id": msg_id,
+            "status": "error",
+            "error": {"code": protocol.CATEGORY_PYTHON_EXCEPTION,
+                      "type": type(exc).__name__, "message": str(exc),
+                      "traceback": ""},
+        })
 
 
 async def run(host, port, tmpdir, tag):
-    """Bind, Port+PID in Tmp-Datei schreiben, serven."""
+    """Bind, write port+pid tmp file, serve; exit when shutdown requested or
+    after the connection dropped (no zombies)."""
+    state = {"shutdown": False, "connections": 0}
+
     async def _serve():
-        # Der Godot-Client fordert den Sub-Protokoll-Header an
-        # (WebSocketPeer.supported_protocols). Der Server muss ihn im
-        # Handshake zurueckgeben, sonst bricht Godot die Verbindung ab.
         server = await websockets.serve(
-            _handle_connection, host, port,
+            partial(_handle_connection, state=state),
+            host, port,
             max_size=512 * 1024 * 1024,
             subprotocols=["pybridge-v%d" % protocol.PROTOCOL_VERSION])
         real_port = server.sockets[0].getsockname()[1]
         _write_tmp(tmpdir, tag, real_port, os.getpid())
-        print("[python_bridge] %s hört auf ws://127.0.0.1:%d (pid=%d)" %
+        print("[python_bridge] %s listens on ws://127.0.0.1:%d (pid=%d)" %
               (tag, real_port, os.getpid()), flush=True)
+
+        saw_connection = False
+        while not state["shutdown"]:
+            await asyncio.sleep(0.1)
+            if state["connections"] > 0:
+                saw_connection = True
+            if saw_connection and state["connections"] <= 0:
+                # Godot closed the connection (crash/stop) without SHUTDOWN.
+                break
+        server.close()
         await server.wait_closed()
 
     try:
@@ -119,6 +289,8 @@ async def run(host, port, tmpdir, tag):
     except (SystemExit, KeyboardInterrupt):
         pass
     finally:
+        # Force-exit: guarantees no lingering process even if a worker
+        # thread is stuck in user code (which cannot be killed safely).
         os._exit(0)
 
 
