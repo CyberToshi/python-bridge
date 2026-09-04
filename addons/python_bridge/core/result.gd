@@ -1,20 +1,26 @@
 class_name PythonBridgeResult
 extends RefCounted
-## Strukturierter Ergebnis-/Fehler-Container aller PythonBridge-Aufrufe.
+## Structured result/error container for every PythonBridge call.
 ##
-## Status-Werte:
-##   "ok"        - Ausfuehrung erfolgreich, `value` enthaelt das Ergebnis
-##   "error"     - Python-Exception, Details in `error`
-##   "timeout"   - Antwort kam nicht rechtzeitig
-##   "not_ready" - Instanz ist (noch) nicht bereit
-##   "down"      - Python-Prozess gestoppt/gestorben
-##   "internal"  - Fehler in der Tool-Infrastruktur
+## Status values (legacy, kept for compatibility):
+##   "ok"        - execution succeeded, `value` holds the result
+##   "error"     - Python exception, details in `error`
+##   "timeout"   - answer did not arrive in time
+##   "not_ready" - instance is not (yet) ready
+##   "down"      - Python process stopped/died
+##   "internal"  - tool infrastructure error
+##   "cancelled" - task was cancelled before completion
+##
+## `error.code` uses the PythonBridgeErrorHandler taxonomy
+## (e.g. "PYTHON_EXCEPTION", "CONNECTION_ERROR", ...).
 
 var ok: bool = false
 var status: String = "internal"
 var value: Variant = null
-var error: Dictionary = {}            # {type, message, traceback}
+var error: Dictionary = {}            # {code, type, message, traceback, task_id, instance_id}
 var request_id: String = ""
+var task_id: String = ""
+var instance_id: String = ""
 var meta: Dictionary = {}
 
 func is_ok() -> bool:
@@ -28,6 +34,9 @@ func error_message() -> String:
 		return str(error["message"])
 	return status
 
+func error_code() -> String:
+	return str(error.get("code", ""))
+
 static func success(value: Variant = null, meta := {}) -> PythonBridgeResult:
 	var result := PythonBridgeResult.new()
 	result.ok = true
@@ -36,13 +45,27 @@ static func success(value: Variant = null, meta := {}) -> PythonBridgeResult:
 	result.meta = meta
 	return result
 
+## Builds a failure result from a structured error dictionary. When `err`
+## lacks a "code", it is normalized via PythonBridgeErrorHandler.
+static func failed_with_error(err: Dictionary, task_id := "", instance_id := "") -> PythonBridgeResult:
+	var normalized: Dictionary = PythonBridgeErrorHandler.normalize(err, task_id, instance_id)
+	var result := PythonBridgeResult.new()
+	result.ok = false
+	result.status = PythonBridgeErrorHandler.status_for_code(str(normalized.get("code", "")))
+	result.error = normalized
+	result.task_id = task_id
+	result.instance_id = instance_id
+	return result
+
+## Legacy constructor: builds a failure from a status string + message.
 static func failed(status: String, message: String = "", err := {}) -> PythonBridgeResult:
 	var result := PythonBridgeResult.new()
 	result.ok = false
 	result.status = status
 	if err.is_empty():
-		err = {"type": status, "message": message, "traceback": ""}
-	elif not err.has("message"):
-		err["message"] = message
+		err = PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, message)
+	elif not err.has("code"):
+		err = PythonBridgeErrorHandler.normalize(err)
 	result.error = err
 	return result

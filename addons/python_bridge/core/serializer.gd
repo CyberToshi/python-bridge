@@ -6,6 +6,9 @@ extends RefCounted
 ## Strukturierte Werte werden als getaggte Objekte `{"$pb": "<tag>", ...}` kodiert.
 ## Große Binär-Blobs (PackedByteArrays, ndarray-Daten, Bilder) werden in den
 ## `chunks`-Puffer der Nachricht gelegt statt als base64 in den JSON-Header.
+##
+## Unbekannte Tags werden an die PythonBridgeTypeMapper-Registry delegiert,
+## sodass benutzerdefinierte Typen ohne Kernänderung ergänzt werden können.
 
 const TAG := "$pb"
 const INLINE_LIMIT := 512
@@ -58,6 +61,13 @@ static func encode(v: Variant, chunks: Array) -> Variant:
 			return {TAG: "arr", "v": arr}
 	if v is Image:
 		return _encode_image(v, chunks)
+	# Custom registered types (Object subclasses): route by registered class.
+	if v is Object:
+		var custom_tag := PythonBridgeTypeMapper.tag_for_value(v)
+		if custom_tag != "":
+			var enc: Callable = PythonBridgeTypeMapper.custom_encode(custom_tag)
+			if enc.is_valid():
+				return enc.call(v, chunks)
 	return {TAG: "unsupported", "type": type_string(typeof(v))}
 
 static func _encode_blob(v: PackedByteArray, chunks: Array, tag: String) -> Dictionary:
@@ -142,6 +152,11 @@ static func decode(v: Variant, chunks: Array) -> Variant:
 			"pyobject":
 				return str(v.get("text", "<pyobject>"))
 			"unsupported":
+				return null
+			_: # Custom registered tags
+				var dec: Callable = PythonBridgeTypeMapper.custom_decode(t)
+				if dec.is_valid():
+					return dec.call(v, chunks)
 				return null
 	if v is Array:
 		var out3: Array = []
@@ -241,3 +256,4 @@ static func _decode_image(v: Dictionary, chunks: Array) -> Image:
 	return Image.create_from_data(int(v["w"]), int(v["h"]),
 		bool(v.get("mipmaps", false)),
 		int(v["format"]) as Image.Format, data)
+

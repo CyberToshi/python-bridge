@@ -1,19 +1,73 @@
 class_name PythonProtocol
 extends RefCounted
-## Versioniertes Nachrichten-Protokoll.
+## Versioned message protocol (v2).
 ##
-## Frame-Typen (ein WebSocket-Frame = eine Nachricht):
-##   Text:   reines JSON.
-##   Binary: U32BE(Header-Laenge) + HeaderJSON(utf8) +
-##           Liste aus [U32BE(Chunk-Laenge) + Chunk-Bytes].
+## Frame types (one WebSocket frame = one message):
+##   Text:   plain JSON.
+##   Binary: U32LE(header length) + HeaderJSON(utf8) +
+##           list of [U32LE(chunk length) + chunk bytes].
+##
+## Every message has the shape:
+##   { "v": 2, "type": "<TYPE>", "id": "<id>", ...payload }
+##
+## Response envelopes (task / batch):
+##   { "v": 2, "type": "task_result", "id": "<task>", "status": "ok",
+##     "data": <serialized>, "ms": <int> }
+##   { "v": 2, "type": "task_error",  "id": "<task>",
+##     "error": {code, type, message, traceback}, "ms": <int> }
+##
+## Large binary payloads never travel inside the JSON header: the serializer
+## appends them to `chunks`, which are carried after the header in binary
+## frames (see PythonBridgeSerializer / type_mapper.gd).
 
-const PROTOCOL_VERSION := 1
+const PROTOCOL_VERSION := 2
 
+# --- Message types -----------------------------------------------------------
+const MSG_HELLO := "hello"
+const MSG_HELLO_ACK := "hello_ack"
+const MSG_TASK := "task"                # single task (command: run|call|define)
+const MSG_TASK_RESULT := "task_result"
+const MSG_TASK_ERROR := "task_error"
+const MSG_BATCH := "batch"              # multiple tasks in one frame
+const MSG_BATCH_RESULT := "batch_result"
+const MSG_CANCEL := "cancel"
+const MSG_CANCEL_ACK := "cancel_ack"
+const MSG_PING := "ping"
+const MSG_PONG := "pong"
+const MSG_RELOAD := "reload"
+const MSG_RELOAD_ACK := "reload_ack"
+const MSG_INTROSPECT := "introspect"
+const MSG_INTROSPECT_RESULT := "introspect_result"
+const MSG_STATUS := "status"
+const MSG_EVENT := "event"
+const MSG_SHUTDOWN := "shutdown"
+const MSG_SHUTDOWN_ACK := "shutdown_ack"
+
+# Task command kinds inside MSG_TASK / MSG_BATCH items
+const CMD_RUN := "run"
+const CMD_CALL := "call"
+const CMD_DEFINE := "define"
+
+# Field holding the items list for batch messages. Both directions use this
+# field; each item carries its own "id" plus command-specific payload.
+const FIELD_ITEMS := "items"
+
+## Builds a complete frame for a message dictionary. Serializes `data` (and
+## any nested batch item data) through the type mapper, collecting binary
+## chunks. Returns {"text": String} or {"binary": PackedByteArray}.
 static func build_frame(msg: Dictionary) -> Dictionary:
 	var chunks: Array = []
 	var enc: Dictionary = msg.duplicate(true)
 	if enc.has("data"):
 		enc["data"] = PythonBridgeSerializer.encode(enc["data"], chunks)
+	if enc.has(FIELD_ITEMS) and enc[FIELD_ITEMS] is Array:
+		var items: Array = []
+		for item in enc[FIELD_ITEMS]:
+			var it: Dictionary = (item as Dictionary).duplicate(true)
+			if it.has("data"):
+				it["data"] = PythonBridgeSerializer.encode(it["data"], chunks)
+			items.append(it)
+		enc[FIELD_ITEMS] = items
 
 	if chunks.is_empty():
 		return {"text": JSON.stringify(enc)}
@@ -27,15 +81,15 @@ static func build_frame(msg: Dictionary) -> Dictionary:
 		out.append_array(chunk)
 	return {"binary": out}
 
+## Parses a frame (String or PackedByteArray). Returns
+## {"msg": Dictionary, "data": Variant}; batch items are decoded in place
+## into msg[FIELD_ITEMS]. Malformed input yields an empty msg.
 static func parse_frame(pkt: Variant) -> Dictionary:
 	if pkt is String:
 		var parsed: Variant = JSON.parse_string(pkt)
 		var msg: Dictionary = parsed if parsed is Dictionary else {}
-		var data: Variant = null
-		if msg.has("data"):
-			# Auch Text-Frames tragen das getaggte data-Feld und muessen es
-			# durch den Serializer zurueckkonvertieren (ohne Binär-Chunks).
-			data = PythonBridgeSerializer.decode(msg["data"], [])
+		_decode_data_in_place(msg, [])
+		var data: Variant = msg.get("data", null)
 		return {"msg": msg, "data": data}
 
 	if pkt is PackedByteArray:
@@ -56,17 +110,43 @@ static func parse_frame(pkt: Variant) -> Dictionary:
 			chunks.append(bytes.slice(offset + 4, offset + 4 + chunk_len))
 			offset += 4 + chunk_len
 
-		var data: Variant = null
-		if msg.has("data"):
-			data = PythonBridgeSerializer.decode(msg["data"], chunks)
+		_decode_data_in_place(msg, chunks)
+		var data: Variant = msg.get("data", null)
 		return {"msg": msg, "data": data}
 
 	return {"msg": {}, "data": null}
 
+## Decodes the serialized `data` field (and batch item data fields) in place.
+static func _decode_data_in_place(msg: Dictionary, chunks: Array) -> void:
+	if msg.has("data") and msg["data"] != null:
+		msg["data"] = PythonBridgeSerializer.decode(msg["data"], chunks)
+	if msg.has(FIELD_ITEMS) and msg[FIELD_ITEMS] is Array:
+		var items: Array = msg[FIELD_ITEMS]
+		for i in items.size():
+			var item: Dictionary = items[i] as Dictionary
+			if item != null and item.has("data") and item["data"] != null:
+				items[i] = item.duplicate(true)
+				items[i]["data"] = PythonBridgeSerializer.decode(item["data"], chunks)
+
+## Convenience: builds a task_result / task_error response envelope.
+static func response_envelope(msg_type: String, id: String, status: String,
+		data: Variant = null, error: Dictionary = {}, ms: int = 0) -> Dictionary:
+	var msg := {
+		"v": PROTOCOL_VERSION,
+		"type": msg_type,
+		"id": id,
+		"status": status,
+		"ms": ms,
+	}
+	if status == "ok":
+		msg["data"] = data
+	else:
+		msg["error"] = error
+	return msg
+
 static func _u32_bytes(value: int) -> PackedByteArray:
-	# Explizit Little-Endian kodieren: Godot 4.7 dekodiert u32-Laengen als
-	# Little-Endian (decode_u32 ohne Endian-Parameter) - die Python-Seite
-	# schreibt deshalb ebenfalls Little-Endian-Laengen.
+	# Explicit little-endian: Godot's decode_u32 reads little-endian and the
+	# Python side writes little-endian as well (struct.pack "<I").
 	var bytes := PackedByteArray()
 	bytes.resize(4)
 	bytes[0] = value & 0xFF
