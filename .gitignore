@@ -1,0 +1,17 @@
+# Godot
+.godot/
+*.tmp
+*.import
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# venv created by the bridge inside user projects
+python_bridge/venv/
+python_bridge/tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db

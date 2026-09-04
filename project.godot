@@ -1,0 +1,17 @@
+; Engine configuration file.
+; Minimal test project for the Python Bridge add-on.
+; Headless test run:  godot --headless --path . --script res://tests/gdscript/run_tests.gd
+config_version=5
+
+[application]
+
+config/name="Python Bridge Tests"
+config/features=PackedStringArray("4.3")
+
+[autoload]
+
+PythonBridge="*res://addons/python_bridge/core/python_bridge.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/python_bridge/plugin.cfg")
