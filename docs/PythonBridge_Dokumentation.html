@@ -100,17 +100,108 @@ Nachrichten-Typen (Protokoll v2): <code>hello → hello_ack</code> · <code>task
 <code>shutdown → shutdown_ack</code> · <code>event</code> · <code>status</code>
 </p>
 
-<h2>3. Installation in einem neuen Projekt</h2>
+<h2>3. Installation in einem neuen Projekt (Schritt für Schritt)</h2>
+<p>
+Die folgenden fünf Schritte führen ohne Vorkenntnisse durch die komplette
+Einrichtung. Am Ende dieses Kapitels kannst du die erste Python-Funktion aus
+einem GDScript-Skript heraus aufrufen.
+</p>
+
+<h3>3.1 Voraussetzungen</h3>
+<ul>
+  <li>Godot 4.2+ (getestet mit 4.7.x) – die verwendeten APIs existieren ab 4.2.</li>
+  <li>Python 3.8+ muss installiert sein. Die Bridge findet sie automatisch über <code>PATH</code>, <code>PYTHON_PATH</code> oder <code>python_executable</code> – es wird kein fester Pfad benötigt.</li>
+</ul>
+
+<h3>3.2 Schritt 1: Addon in das Projekt kopieren</h3>
+<p>
+Den kompletten Ordner <code>addons/python_bridge/</code> in das Wurzelverzeichnis des
+Zielprojekts kopieren, sodass er unter <code>res://addons/python_bridge/</code> liegt
+(im Godot-<b>FileSystem</b>-Dock sichtbar).
+</p>
+
+<h3>3.3 Schritt 2: Das Plugin aktivieren</h3>
 <ol>
-  <li>Den Ordner <code>addons/python_bridge</code> in das Zielprojekt nach <code>addons/</code> kopieren.</li>
-  <li>Godot öffnen → Projekt → Projekteinstellungen → Plugins → „Python Bridge“ aktivieren. Das Plugin registriert den Autoload-Singleton <code>PythonBridge</code> automatisch.</li>
-  <li>Python 3.8+ muss installiert sein (die Bridge findet sie über <code>PATH</code>, <code>PYTHON_PATH</code> oder <code>python_executable</code>).</li>
-  <li>Beim ersten Start wird automatisch <code>python_bridge/venv/</code> erzeugt und <code>websockets</code> (+ konfigurierte Pakete) installiert – das kann 1–3 Minuten dauern.</li>
+  <li>Godot öffnen (das Projekt muss neu gescannt werden, damit das Addon im <b>FileSystem</b>-Dock unter <code>addons/</code> auftaucht).</li>
+  <li>Hauptmenü oben: <b>Projekt → Projekteinstellungen…</b></li>
+  <li>Im Dialog oben auf den Reiter <b>Plugins</b> klicken.</li>
+  <li>Genau ein Eintrag: <b>Python Bridge</b> → rechts das Häkchen bei <b>Aktivieren</b> setzen.</li>
+  <li>Godot fragt ggf. nach einem <b>Editor-Neustart</b> → zustimmen.</li>
 </ol>
 <div class="note">
-<b>Hinweis:</b> Das venv liegt im Projektordner. Damit Godot es nicht als Ressourcen importiert, enthält
-<code>python_bridge/venv/</code> eine <code>.gdignore</code>-Datei. Das Plugin kopiert die Python-Quellen bei jedem
-Start nach <code>python_bridge/bridge/</code>, damit Quell- und Laufzeit-Version immer identisch sind.
+<b>Wichtig:</b> Ohne diesen Schritt existiert das Dock noch nicht. Die Aktivierung
+bewirkt zwei Dinge: (1) Der Autoload-Singleton <code>PythonBridge</code> wird registriert
+(Projekt → Projekteinstellungen → Autoload) – von dort rufen alle deine Skripte
+<code>PythonBridge.call_script(...)</code> usw. auf. (2) Das Editor-Dock wird in den
+rechten Dock-Streifen gehängt.
+</div>
+
+<h3>3.4 Schritt 3: Das „Python Bridge“-Dock finden</h3>
+<p>
+Das Dock ist ein Panel in der <b>rechten Dock-Leiste des Editors</b> – derselbe
+vertikale Streifen, in dem auch <b>FileSystem</b> (Standard: oberer Bereich) und
+<b>History / Node / Editor-Doku</b> (unterer Bereich) liegen. Genauer Ort:
+<b>rechts, oberer Slot, direkt neben dem FileSystem-Tab</b>.
+</p>
+<pre>
+┌─ Editor ────────────────────────────┬──────────────────────────┐
+│ Szene        │                      │ FileSystem │ rechter     │
+│              │    2D/3D-Viewport    │ Python     │ Dock-Streifen│
+│              │                      │ Bridge   ◄─│ DIESER Tab  │
+│              │                      │ ═══════════│             │
+│              │                      │ History, Node, … (unten) │
+├──────────────┴──────────────────────┴──────────────────────────┤
+│ Unterer Bereich: Output, Debugger, …                            │
+└────────────────────────────────────────────────────────────────┘
+</pre>
+<p>So erkennst du es:</p>
+<ul>
+  <li>Am <b>rechten Fensterrand</b> steht eine <b>vertikale Spalte von Tab-Beschriftungen</b> (gedrehter Text; solange das Panel zugeklappt ist, ist nur die Beschriftung sichtbar).</li>
+  <li>Klicke auf den vertikalen Tab <b>„Python Bridge“</b> → das Panel fährt aus und enthält von oben nach unten:</li>
+</ul>
+<ol type="a">
+  <li><b>Kopfzeile:</b> <code>Refresh</code> + <code>New script</code> + Statusanzeige</li>
+  <li><b>Skriptliste</b> (alle <code>.py</code>-Dateien aus <code>res://python_bridge/scripts/</code>)</li>
+  <li><b>Code-Editor</b> mit Python-Syntax-Highlighting</li>
+  <li><b>Aktionszeile:</b> <code>Save</code> · <code>Run</code> · <code>Generate wrapper</code> · <code>Hot reload</code></li>
+  <li><b>Log</b>-Bereich</li>
+</ol>
+<p>
+Falls der Tab fehlt oder verschoben wurde: <b>Editor → Editor-Layout → Standard-Layout</b>
+setzt alle Docks zurück.
+</p>
+
+<h3>3.5 Schritt 4: Erste Python-Datei über das Dock anlegen</h3>
+<ol>
+  <li>Im Dock auf <b>New script</b> klicken → Name eingeben (z.&nbsp;B. <code>hallo</code>) → es entsteht <code>res://python_bridge/scripts/hallo.py</code> – eine <b>ganz normale .py-Datei</b> (auch außerhalb von Godot ausführbar).</li>
+  <li>Code eintippen bzw. einfügen → <b>Save</b>.</li>
+</ol>
+<table>
+<tr><th>Button im Dock</th><th>Wirkung</th></tr>
+<tr><td><code>Refresh</code></td><td>Skriptliste neu einlesen (erkennt auch von Hand angelegte Dateien).</td></tr>
+<tr><td><code>New script</code></td><td>Neue <code>.py</code>-Datei im Workspace anlegen.</td></tr>
+<tr><td><code>Save</code></td><td>Aktuell geöffneten Code speichern.</td></tr>
+<tr><td><code>Run</code></td><td>Datei sofort ausführen (<code>execute_script</code>), Ausgabe erscheint im Log.</td></tr>
+<tr><td><code>Generate wrapper</code></td><td>GDScript-Klasse für das Skript erzeugen (siehe Kapitel 8; optional, erspart <code>call_script</code>-Boilerplate).</td></tr>
+<tr><td><code>Hot reload</code></td><td>Geänderten Code ohne Neustart neu laden (je nach <code>hot_reload_mode</code>).</td></tr>
+</table>
+
+<h3>3.6 Schritt 5: Was beim ersten Start automatisch passiert</h3>
+<p>
+Beim ersten <code>await PythonBridge.start_instance("default")</code> (aus GDScript,
+siehe Kapitel 4) legt die Bridge automatisch an bzw. startet:</p>
+<ul>
+  <li><code>res://python_bridge/</code> mit <code>scripts/</code>, <code>tmp/</code>, <code>config/</code>, <code>venv/</code>,</li>
+  <li>eine Python-venv (falls nicht vorhanden),</li>
+  <li><code>websockets&gt;=11</code> + konfigurierte Dependencies (nicht-blockierend, Log in <code>tmp/pip.log</code>),</li>
+  <li>den Python-Server als Subprozess + WebSocket-Verbindung bis READY.</li>
+</ul>
+<div class="note">
+<b>Hinweis:</b> Du startest <b>niemals selbst ein Terminal</b> für Python – die Bridge
+verwaltet Prozess, Verbindung und Tasks vollständig. Das venv liegt im Projektordner;
+damit Godot es nicht als Ressourcen importiert, enthält <code>python_bridge/venv/</code>
+eine <code>.gdignore</code>-Datei. Das Plugin kopiert die Python-Quellen bei jedem Start nach
+<code>python_bridge/bridge/</code>, damit Quell- und Laufzeit-Version immer identisch sind.
 </div>
 
 <h2>4. GDScript-API-Referenz</h2>
