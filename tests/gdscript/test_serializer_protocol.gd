@@ -2,6 +2,8 @@ class_name PBTestSerializerProtocol
 extends PBTests
 ## Round-trip tests for the type mapper / serializer / protocol frames.
 
+const PB_Facade := preload("res://addons/python_bridge/core/python_bridge.gd")
+
 func test_scalars() -> void:
 	var chunks: Array = []
 	var enc: Variant = PythonBridgeSerializer.encode(42, chunks)
@@ -137,6 +139,70 @@ func test_binary_frame_roundtrip() -> void:
 	assert_true(frame.has("binary"))
 	var parsed: Dictionary = PythonProtocol.parse_frame(frame["binary"])
 	assert_eq((parsed["data"] as PackedByteArray).size(), 1024)
+
+# ------------------------------------------------------------ DataRef handles
+func test_data_ref_descriptor_decodes_to_handle() -> void:
+	var chunks: Array = []
+	var desc := {
+		PythonBridgeSerializer.TAG: "data_ref",
+		"id": "data-42",
+		"kind": "ndarray",
+		"dtype": "float32",
+		"shape": [5, 3],
+		"nbytes": 60,
+		"order": "C",
+		"readonly": true,
+	}
+	var dec: Variant = PythonBridgeSerializer.decode(desc, chunks)
+	assert_true(dec is PythonBridgeDataRef, "data_ref decodes to a handle, not the data")
+	var ref := dec as PythonBridgeDataRef
+	assert_eq(ref.data_id, "data-42")
+	assert_eq(ref.kind, "ndarray")
+	assert_eq(ref.dtype, "float32")
+	assert_eq(ref.shape, [5, 3])
+	assert_eq(ref.nbytes, 60)
+	assert_true(ref.readonly)
+	assert_false(ref.is_stale())
+	var info: Dictionary = ref.describe()
+	assert_eq(info["id"], "data-42")
+	assert_eq(info["shape"], [5, 3])
+
+func test_data_ref_stale_precheck_errors() -> void:
+	var bridge := PB_Facade.new()
+	var ref := PythonBridgeDataRef.from_descriptor({
+		"id": "data-1", "kind": "ndarray", "dtype": "float64",
+		"shape": [10], "nbytes": 80})
+	ref.instance_name = "default"
+	ref.mark_stale()
+	var res: PythonBridgeResult = await bridge.materialize_data(ref)
+	assert_true(res.is_error())
+	assert_eq(res.error_code(), PythonBridgeErrorHandler.CATEGORY_TASK_ERROR)
+	assert_true(str(res.error_message()).contains("stale"), "structured stale message")
+	bridge.free()
+
+func test_data_ref_without_instance_errors() -> void:
+	var bridge := PB_Facade.new()
+	var ref := PythonBridgeDataRef.from_descriptor({
+		"id": "data-2", "kind": "ndarray", "dtype": "float32",
+		"shape": [4], "nbytes": 16})
+	var res: PythonBridgeResult = await bridge.materialize_data(ref)
+	assert_true(res.is_error())
+	assert_eq(res.error_code(), PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR)
+	bridge.free()
+
+func test_data_release_noop_on_stale_returns_ok() -> void:
+	var bridge := PB_Facade.new()
+	var ref := PythonBridgeDataRef.from_descriptor({
+		"id": "data-3", "kind": "ndarray", "dtype": "float32",
+		"shape": [4], "nbytes": 16})
+	ref.instance_name = "gone"
+	ref.mark_stale()
+	# Instance 'gone' does not exist: release degrades gracefully.
+	var res: PythonBridgeResult = await bridge.release_data(ref)
+	assert_true(res.is_ok())
+	assert_true(res.value["released"] == false)
+	assert_true(ref.is_stale())
+	bridge.free()
 
 func test_batch_frame_items() -> void:
 	var msg := {

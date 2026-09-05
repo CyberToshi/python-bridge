@@ -47,6 +47,11 @@ static func defaults() -> Dictionary:
 		"max_dispatch_per_frame": 16,
 		"max_results_per_frame": 64,
 		"max_inbox_size": 512,
+		"max_decode_bytes_per_frame": 16 * 1024 * 1024,  # Entpack-Budget pro Frame
+		# --- Data plane / DataRef --------------------------------------------------
+		# numpy-Ergebnisse >= dieser Schwelle werden als DataRef-Handle gehalten
+		# (Materialisierung erst auf Anfrage); 0 = deaktiviert (direkter Transfer).
+		"data_ref_threshold_bytes": 16 * 1024 * 1024,
 		# --- Connection / provisioning -------------------------------------------
 		"connect_timeout_ms": 20000,
 		"provision_venv_timeout_ms": 120000,

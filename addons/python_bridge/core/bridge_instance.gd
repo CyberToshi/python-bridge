@@ -109,6 +109,9 @@ func _launch() -> void:
 	cmd.append(str(int(_settings.get("max_stderr_bytes", 1024 * 1024))))
 	cmd.append("--max-result-bytes")
 	cmd.append(str(int(_settings.get("max_result_bytes", 256 * 1024 * 1024))))
+	# Data-Plane: Schwelle fuer automatische DataRef-Handles grosser Ergebnisse.
+	cmd.append("--data-ref-threshold-bytes")
+	cmd.append(str(int(_settings.get("data_ref_threshold_bytes", 16 * 1024 * 1024))))
 	_process = BridgeProcessManager.new()
 	if not _process.start(cmd):
 		_last_error = "Process launch failed."
@@ -256,7 +259,7 @@ func _handle_message(parsed: Dictionary) -> void:
 			_health.record_pong()
 		PythonProtocol.MSG_SHUTDOWN_ACK:
 			_shutdown_ack_received = true
-		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT, PythonProtocol.MSG_STATUS:
+		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT, PythonProtocol.MSG_STATUS, PythonProtocol.MSG_DATA_RESULT, PythonProtocol.MSG_DATA_ACK:
 			message_received.emit(instance_name, parsed)
 		_:
 			print("[Python][%s] unknown message: %s" % [instance_name, JSON.stringify(msg)])

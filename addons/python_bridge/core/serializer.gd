@@ -193,6 +193,8 @@ static func decode(v: Variant, chunks: Array) -> Variant:
 				return str(v.get("text", "<pyobject>"))
 			"unsupported":
 				return null
+			"data_ref":
+				return PythonBridgeDataRef.from_descriptor(v)
 			_: # Custom registered tags
 				var dec: Callable = PythonBridgeTypeMapper.custom_decode(t)
 				if dec.is_valid():

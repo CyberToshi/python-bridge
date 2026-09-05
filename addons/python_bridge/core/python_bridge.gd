@@ -28,6 +28,11 @@ var _script_registry: PythonBridgeScriptRegistry = null
 var _task_seq: int = 0
 var _context_seq: int = 0
 var _shutting_down: bool = false
+# Data-Plane (DataRef-Handles): laufende data_get/data_release-Anfragen und
+# die je Instanz bekannten Handles (fuer stale-Markierung beim Lifecycle).
+var _pending_data: Dictionary = {}
+var _refs_by_instance: Dictionary = {}     # instance -> Array[PythonBridgeDataRef]
+var _data_seq: int = 0
 
 func _init() -> void:
 	# Runtime initialization: the global class cache is fully built by the
@@ -156,6 +161,7 @@ func shutdown() -> void:
 ## _exit_tree / Editor-Teilung gedacht.
 func shutdown_now() -> void:
 	_shutting_down = true
+	_mark_all_refs_stale()
 	for name in _instances.keys():
 		var inst := _get_instance_by_name(name)
 		if inst:
@@ -169,12 +175,17 @@ func _on_instance_state(instance: String, state: String) -> void:
 	# Source wieder mitschickt und den Context sauber neu aufbaut.
 	if state in ["stopped", "crashed", "error", "restarting"]:
 		_script_registry.reset_instance(instance)
+		# Alle Daten-Handles dieser Instanz sind ungueltig: der Python-Prozess
+		# kennt die gehaltenen Datensaetze nicht mehr.
+		_mark_instance_refs_stale(instance)
 	instance_state_changed.emit(instance, state)
 
 func _on_instance_message(instance: String, parsed: Dictionary) -> void:
-	# Introspect-Antworten loesen die Facade direkt auf (kein Task-Durchlauf).
+	# Introspect-/Data-Antworten loesen die Facade direkt auf (kein Task-
+	# Durchlauf; sie sind Request/Response ueber _pending_*).
 	var msg: Dictionary = parsed.get("msg", {})
-	if str(msg.get("type", "")) == PythonProtocol.MSG_INTROSPECT_RESULT:
+	var mtype := str(msg.get("type", ""))
+	if mtype == PythonProtocol.MSG_INTROSPECT_RESULT:
 		var rid := str(msg.get("id", ""))
 		if rid != "":
 			_pending_introspect[rid] = {
@@ -182,6 +193,11 @@ func _on_instance_message(instance: String, parsed: Dictionary) -> void:
 				"functions": msg.get("functions", []),
 				"error": msg.get("error", {}),
 			}
+		return
+	if mtype == PythonProtocol.MSG_DATA_RESULT or mtype == PythonProtocol.MSG_DATA_ACK:
+		var rid2 := str(msg.get("id", ""))
+		if rid2 != "":
+			_pending_data[rid2] = msg
 		return
 	# Task-Ergebnisse gehen in den Scheduler (Frame-Sync); Events ebenfalls.
 	_scheduler.on_message(instance, parsed)
@@ -191,10 +207,42 @@ func _on_instance_lost(instance: String, error: Dictionary) -> void:
 	# per Backoff-Policy. Registry-Bestaetigungen des Prozesses sind damit
 	# ungueltig (der neue Prozess startet mit leeren Contexts).
 	_script_registry.reset_instance(instance)
+	_mark_instance_refs_stale(instance)
 	_scheduler.on_instance_lost(instance, error)
 
 func _on_bridge_event(instance: String, event: Dictionary) -> void:
 	bridge_event.emit(instance, event)
+
+# ------------------------------------------------------------ Data-Plane (Refs)
+## Registriert DataRef-Handles aus einem Task-Ergebnis und ordnet sie der
+## Instanz zu, die das Ergebnis geliefert hat (Auto-Tasks erfahren ihre
+## konkrete Instanz erst beim Dispatch).
+func _track_ref_value(v: Variant, instance_name: String) -> void:
+	if v is PythonBridgeDataRef:
+		var ref := v as PythonBridgeDataRef
+		if ref.instance_name == "":
+			ref.instance_name = instance_name
+		if not _refs_by_instance.has(instance_name):
+			_refs_by_instance[instance_name] = []
+		var arr: Array = _refs_by_instance[instance_name]
+		if not arr.has(ref):
+			arr.append(ref)
+	elif v is Array:
+		for x in v:
+			_track_ref_value(x, instance_name)
+	elif v is Dictionary:
+		for k in v:
+			_track_ref_value(v[k], instance_name)
+
+func _mark_instance_refs_stale(instance: String) -> void:
+	var arr: Array = _refs_by_instance.get(instance, [])
+	for ref in arr:
+		(ref as PythonBridgeDataRef).mark_stale()
+	_refs_by_instance.erase(instance)
+
+func _mark_all_refs_stale() -> void:
+	for instance in _refs_by_instance.keys():
+		_mark_instance_refs_stale(instance)
 
 func _get_ready_instances() -> Array:
 	var ready: Array = []
@@ -235,7 +283,11 @@ func submit_task(task: PythonBridgeTask) -> PythonBridgeResult:
 	var res := _task_manager.submit(task, now)
 	if res.is_ok():
 		task.done.connect(func(r: PythonBridgeResult) -> void:
-			task_done.emit(task))
+			task_done.emit(task)
+			# DataRef-Handles im Ergebnis registrieren (Auto-Tasks kennen ihre
+			# Instanz erst nach dem Dispatch; r.instance_id ist dann gesetzt).
+			if task.result != null and task.result.value != null and task.instance_id != "":
+				_track_ref_value(task.result.value, task.instance_id))
 	return res
 
 func cancel_task(task_id: String) -> bool:
@@ -458,3 +510,105 @@ func _introspect_result_to_result(pending: Dictionary) -> PythonBridgeResult:
 	return PythonBridgeResult.failed_with_error(pending.get("error", {}))
 
 var _pending_introspect: Dictionary = {}
+
+# ------------------------------------------------------------------ Data-Plane API
+## Materialisiert einen DataRef-Handle: holt die Daten vom Python-Prozess
+## (normale, binär-chunked Uebertragung) und liefert sie als gewoehnlichen
+## Wert (typisierte Arrays fuer numpy, PackedByteArray fuer Bytes, ...).
+## Handles koennen mehrfach materialisiert werden; ein stale/Released-Handle
+## liefert einen strukturierten Fehler statt eines Absturzes.
+func materialize_data(ref: PythonBridgeDataRef, timeout_sec := 60.0) -> PythonBridgeResult:
+	var pre := _ref_precheck(ref)
+	if pre.is_error():
+		return pre
+	var inst := _get_instance_by_name(ref.instance_name)
+	if inst == null or not inst.is_ready():
+		return _ref_stale_result(ref, "Instance '%s' is not ready" % ref.instance_name)
+	var rid := _next_data_rid("get")
+	var msg := {
+		"v": PythonProtocol.PROTOCOL_VERSION,
+		"type": PythonProtocol.MSG_DATA_GET,
+		"id": rid,
+		"ref_id": ref.data_id,
+	}
+	var pending := await _data_request_wait(inst, msg, timeout_sec)
+	if str(pending.get("status", "error")) == "ok":
+		return PythonBridgeResult.success(pending.get("data", null))
+	var err: Dictionary = pending.get("error", {})
+	err = PythonBridgeErrorHandler.normalize(err, ref.data_id, ref.instance_name)
+	return PythonBridgeResult.failed_with_error(err, ref.data_id, ref.instance_name)
+
+## Gibt die vom Handle referenzierten Daten im Python-Prozess frei (Speicher).
+## Der Handle wird als stale markiert; weitere materialize_data-Aufrufe
+## schlagen strukturiert fehl. Nach Instanz-Ende/Crash sind Handles ohnehin
+## stale - release_data ist dann ein No-Op (Erfolg, released=false).
+func release_data(ref: PythonBridgeDataRef, timeout_sec := 10.0) -> PythonBridgeResult:
+	if ref == null:
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, "DataRef is null"))
+	var inst := _get_instance_by_name(ref.instance_name) if ref.instance_name != "" else null
+	var released := false
+	if inst != null and inst.is_ready() and not ref.is_stale():
+		var rid := _next_data_rid("rel")
+		var msg := {
+			"v": PythonProtocol.PROTOCOL_VERSION,
+			"type": PythonProtocol.MSG_DATA_RELEASE,
+			"id": rid,
+			"ref_id": ref.data_id,
+		}
+		var pending := await _data_request_wait(inst, msg, timeout_sec)
+		released = bool(pending.get("freed", false))
+	ref.mark_stale()
+	if ref.instance_name != "" and _refs_by_instance.has(ref.instance_name):
+		(_refs_by_instance[ref.instance_name] as Array).erase(ref)
+	return PythonBridgeResult.success({"released": released, "ref_id": ref.data_id})
+
+## Strukturierte Beschreibung eines Handles ohne Roundtrip.
+func describe_data(ref: PythonBridgeDataRef) -> PythonBridgeResult:
+	if ref == null:
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, "DataRef is null"))
+	return PythonBridgeResult.success(ref.describe())
+
+func _ref_precheck(ref: PythonBridgeDataRef) -> PythonBridgeResult:
+	if ref == null:
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, "DataRef is null"))
+	if ref.is_stale():
+		return _ref_stale_result(ref, "Data handle '%s' is stale (instance ended or released)" % ref.data_id)
+	if ref.data_id == "" or ref.instance_name == "":
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
+			"Data handle has no id/instance association"))
+	return PythonBridgeResult.success({})
+
+func _ref_stale_result(ref: PythonBridgeDataRef, message: String) -> PythonBridgeResult:
+	return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+		PythonBridgeErrorHandler.CATEGORY_TASK_ERROR, message, ref.data_id))
+
+func _next_data_rid(kind: String) -> String:
+	_data_seq += 1
+	return "data-%s-%d" % [kind, _data_seq]
+
+## Request/Response-Helfer (main-thread, non-blocking): sendet `msg` an die
+## Instanz und wartet per process_frame auf die passende _pending_data-
+## Antwort (MSG_DATA_RESULT / MSG_DATA_ACK).
+func _data_request_wait(inst: BridgeInstance, msg: Dictionary, timeout_sec: float) -> Dictionary:
+	var rid := str(msg.get("id", ""))
+	if inst.send_message(msg) != OK:
+		return {"status": "error", "error": PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_CONNECTION_ERROR,
+			"Data request send failed (connection closed?)")}
+	var timeout_ms := int(timeout_sec * 1000.0)
+	var waited := 0.0
+	while waited < float(timeout_ms) / 1000.0:
+		await get_tree().process_frame
+		waited += 0.016
+		if _pending_data.has(rid) and _pending_data[rid] != null:
+			var pending: Dictionary = _pending_data[rid]
+			_pending_data.erase(rid)
+			return pending
+	_pending_data.erase(rid)
+	return {"status": "error", "error": PythonBridgeErrorHandler.make(
+		PythonBridgeErrorHandler.CATEGORY_TIMEOUT_ERROR,
+		"Data request timeout after %d ms" % timeout_ms)}
