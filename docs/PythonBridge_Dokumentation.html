@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Python Bridge – Addon-Dokumentation</title>
+<style>
+  body {
+    font-family: "Liberation Serif", Georgia, serif;
+    font-size: 11pt;
+    line-height: 1.45;
+    color: #000000;
+    background: #ffffff;
+    margin: 40px;
+  }
+  h1 { font-size: 20pt; text-align: center; margin-bottom: 4px; }
+  .subtitle { text-align: center; font-size: 10.5pt; color: #333; margin-bottom: 24px; }
+  h2 { font-size: 14pt; margin-top: 28px; border-bottom: 1px solid #999; padding-bottom: 3px; }
+  h3 { font-size: 12pt; margin-top: 20px; }
+  .toc { margin: 16px 0 24px 24px; }
+  .toc li { margin-bottom: 3px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #888; padding: 4px 8px; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  code, pre { font-family: "Liberation Mono", "Courier New", monospace; font-size: 9pt; }
+  pre { background: #f5f5f5; border: 1px solid #ccc; padding: 8px; white-space: pre-wrap; }
+  .note { background: #ffffe0; border: 1px solid #cc0; padding: 6px 10px; margin: 10px 0; }
+  .small { font-size: 9pt; color: #555; }
+  ul { margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<p class="small" style="text-align:right;">Python Bridge – Addon-Dokumentation</p>
+
+<h1>Python Bridge – Addon-Dokumentation</h1>
+<p class="subtitle">Version 0.2.1 | Godot 4.2+ (getestet 4.7.x) + Python 3.8+ | WebSocket-basierte Python-Prozess-Instanzen mit Task-Manager</p>
+
+<div class="toc">
+  <b>Inhalt</b>
+  <ol>
+    <li>Übersicht</li>
+    <li>Architektur</li>
+    <li>Installation in einem neuen Projekt</li>
+    <li>GDScript-API-Referenz</li>
+    <li>Task Manager &amp; Scheduler</li>
+    <li>Datentransport &amp; Typen</li>
+    <li>Python-Seite</li>
+    <li>Editor-Integration</li>
+    <li>Lebenszyklus, Provisioning &amp; Fehlerbehandlung</li>
+    <li>Troubleshooting</li>
+  </ol>
+</div>
+
+<h2>1. Übersicht</h2>
+<p>
+Die Python Bridge startet aus Godot heraus einen oder mehrere Python-Subprozesse (je Instanz ein eigener
+Prozess) und kommuniziert mit ihnen über WebSocket auf <code>127.0.0.1</code>. Sie übernimmt automatisch:
+</p>
+<ul>
+  <li><b>venv-Verwaltung:</b> legt pro Projekt ein virtuelles Environment unter <code>python_bridge/venv/</code> an (einmalig).</li>
+  <li><b>Dependency-Management:</b> installiert <code>websockets</code> + frei konfigurierbare Pakete (z.&nbsp;B. <code>numpy</code>) per <code>pip</code>.</li>
+  <li><b>Python-Erkennung:</b> findet eine installierte Python (3.8+) selbst, ohne fest verdrahteten Pfad.</li>
+  <li><b>Task Manager:</b> zentrale Warteschlange mit Prioritäten, Timeout, Cancel, Retry und Backpressure.</li>
+  <li><b>Frame-Synchronisation:</b> Python-Antworten werden gepuffert und kontrolliert im Haupt-Thread verarbeitet – kein Frame-Stall.</li>
+  <li><b>Task-Batching:</b> kurz aufeinanderfolgende Aufrufe werden optional zu einem Paket zusammengefasst.</li>
+  <li><b>Health Monitoring &amp; Crash-Restart:</b> Ping/Pong-Überwachung, automatischer Neustart mit Exponential Backoff.</li>
+  <li><b>Typisierten Transport:</b> JSON für Skalare, Binär-Chunks für große Daten (NumPy-Arrays, Bytes, Bilder).</li>
+  <li><b>Persistente Skript-Kontexte:</b> Skripte und deren Zustand (Importe, Variablen, Funktionen) bleiben in der Instanz erhalten.</li>
+  <li><b>Hot Reload:</b> geänderter Python-Code wird erkannt und per Konfiguration neu geladen.</li>
+  <li><b>Editor-Integration:</b> Python-Editor-Dock mit Syntax-Highlighting und deterministischer GDScript-Wrapper-Generierung.</li>
+</ul>
+
+<h2>2. Architektur</h2>
+<pre>
+              Godot (GDScript)                                   WebSocket                           Python-Prozess
+        PythonBridge (Autoload/Facade)
+          ├─ TaskManager  (Queue, Priorität, Batch, Retry)
+          ├─ Scheduler    (Frame-Sync, Inbox, Budgets)
+          └─ BridgeInstance (je Instanz)
+               ├─ BridgeProcessManager
+               ├─ BridgeConnectionManager          ⇄  ws://127.0.0.1:&lt;port&gt;          ⇄  run_server.py
+               ├─ BridgeHealthMonitor                 Text = JSON · Binary =          ├─ server (asyncio + Worker-Thread)
+               └─ BridgeProvisioner (venv, pip)       Header + Chunks                ├─ executor (Kontexte, Source-Hash)
+                                                                                      ├─ introspection (AST)
+                                                                                      └─ serializer · protocol (v2)
+</pre>
+<p>
+Der Ablauf: Godot startet den Python-Server als Subprozess. Der Server schreibt Port + PID in
+<code>python_bridge/tmp/&lt;instanz&gt;.json</code>. Godot liest die Datei, verbindet sich per WebSocket, sendet ein
+<code>hello</code> und gilt nach der <code>hello_ack</code>-Antwort als READY.
+</p>
+<p>
+<b>Invariante:</b> Python wartet nie auf einen Godot-Frame, und Godot wartet nie auf Python. Eingehende Ergebnisse
+werden im Scheduler gepuffert und innerhalb eines definierten Sync-Punkts (max. <code>max_results_per_frame</code>
+pro Frame) verarbeitet. Jede Anfrage trägt eine eindeutige <code>id</code>; Antworten werden darüber den Tasks zugeordnet.
+</p>
+<p>
+Nachrichten-Typen (Protokoll v2): <code>hello → hello_ack</code> · <code>task / batch → task_result / task_error / batch_result</code> ·
+<code>cancel → cancel_ack</code> · <code>ping → pong</code> · <code>reload → reload_ack</code> · <code>introspect → introspect_result</code> ·
+<code>shutdown → shutdown_ack</code> · <code>event</code> · <code>status</code>
+</p>
+
+<h2>3. Installation in einem neuen Projekt</h2>
+<ol>
+  <li>Den Ordner <code>addons/python_bridge</code> in das Zielprojekt nach <code>addons/</code> kopieren.</li>
+  <li>Godot öffnen → Projekt → Projekteinstellungen → Plugins → „Python Bridge“ aktivieren. Das Plugin registriert den Autoload-Singleton <code>PythonBridge</code> automatisch.</li>
+  <li>Python 3.8+ muss installiert sein (die Bridge findet sie über <code>PATH</code>, <code>PYTHON_PATH</code> oder <code>python_executable</code>).</li>
+  <li>Beim ersten Start wird automatisch <code>python_bridge/venv/</code> erzeugt und <code>websockets</code> (+ konfigurierte Pakete) installiert – das kann 1–3 Minuten dauern.</li>
+</ol>
+<div class="note">
+<b>Hinweis:</b> Das venv liegt im Projektordner. Damit Godot es nicht als Ressourcen importiert, enthält
+<code>python_bridge/venv/</code> eine <code>.gdignore</code>-Datei. Das Plugin kopiert die Python-Quellen bei jedem
+Start nach <code>python_bridge/bridge/</code>, damit Quell- und Laufzeit-Version immer identisch sind.
+</div>
+
+<h2>4. GDScript-API-Referenz</h2>
+<p>
+Alle Funktionen sind Instanz-Methoden des Autoload-Singletons <code>PythonBridge</code> und dürfen daher
+<code>await</code> verwenden. Aufrufe, die Python ausführen, liefern ein <code>PythonBridgeResult</code> (siehe 4.3).
+</p>
+
+<h3>4.1 PythonBridge (Autoload) – Konfiguration &amp; Instanzen</h3>
+<table>
+<tr><th>Funktion</th><th>Beschreibung</th></tr>
+<tr><td><code>configure(cfg: Dictionary)</code></td><td>Globale Einstellungen setzen (siehe Tabelle in Kapitel 5.1). Alle Schlüssel sind optional; Werte werden typisiert normalisiert.</td></tr>
+<tr><td><code>config() → Dictionary</code></td><td>Aktive Konfiguration zurückgeben (Kopie).</td></tr>
+<tr><td><code>workspace_dir() → String</code></td><td>Aktueller Workspace-Pfad (<code>res://python_bridge</code> als Standard).</td></tr>
+<tr><td><code>start_instance(name := "default") → Result</code></td><td>Startet (bzw. holt) eine Instanz und wartet bis READY (Timeout 180 s). Liefert <code>PythonBridgeResult</code>.</td></tr>
+<tr><td><code>get_instance(name := "default")</code></td><td>Liefert die <code>BridgeInstance</code> (oder <code>null</code>), ohne sie zu starten.</td></tr>
+<tr><td><code>instance_status(name := "default") → String</code></td><td>Status-String: <code>none | provisioning | starting | connecting | handshake | ready | crashed | restarting | stopping | stopped | error</code>.</td></tr>
+<tr><td><code>stop_instance(name := "default") · stop_all()</code></td><td>Graceful Shutdown einer/aller Instanzen (sendet <code>shutdown</code>, wartet auf Ack, killt bei Timeout).</td></tr>
+<tr><td><code>shutdown() · shutdown_now()</code></td><td>Blockiert neue Tasks und stoppt alle Instanzen; <code>shutdown_now()</code> erzwingt den sofortigen Stop (keine Zombies).</td></tr>
+<tr><td><code>poll()</code></td><td>Treibt alle Instanzen und den Scheduler pro Frame (automatisch in <code>_process</code> und vom Editor-Plugin).</td></tr>
+<tr><td><code>static system() → Node</code></td><td>Statischer Helfer: findet den Autoload-Node über den Szenenbaum.</td></tr>
+</table>
+<p>
+<b>Signale:</b> <code>pulse</code> (jeden Frame) · <code>instance_state_changed(instance, state)</code> ·
+<code>task_done(task)</code> (jeder terminale Task) · <code>bridge_event(instance, event)</code> (Python → Godot-Events).
+</p>
+
+<h3>4.2 PythonBridge – Skript- &amp; Task-API</h3>
+<table>
+<tr><th>Funktion</th><th>Beschreibung</th></tr>
+<tr><td><code>execute(code, input := {}, instance := "default", timeout_sec := 30.0)</code></td><td>Führt temporären Python-Code in einem Wegwerf-Kontext aus (Konvention: <code>input</code> / <code>result</code>).</td></tr>
+<tr><td><code>create_script(script_id, code, subfolder := "")</code></td><td>Schreibt ein dauerhaftes Skript nach <code>res://python_bridge/scripts/&lt;subfolder&gt;/&lt;id&gt;.py</code> (überschreibt). Liefert <code>PythonBridgeResult</code>.</td></tr>
+<tr><td><code>get_script_source(script_id) → String</code></td><td>Quelltext des Skripts (leer, wenn nicht vorhanden).</td></tr>
+<tr><td><code>execute_script(script_id, input := {}, instance := "default", timeout_sec := 30.0)</code></td><td>Führt ein dauerhaftes Skript aus (Konvention: <code>input</code> / <code>result</code>).</td></tr>
+<tr><td><code>call_script(script_id, function, args := [], kwargs := {}, instance := "default", timeout_sec := 30.0)</code></td><td>Ruft eine benannte Funktion im Skript-Kontext auf; der Rückgabewert ist das Ergebnis. Der Kontext wird per Source-Hash nur bei Änderung neu definiert.</td></tr>
+<tr><td><code>define_script(script_id, instance := "default", timeout_sec := 30.0)</code></td><td>Lädt ein Skript vorab in den Kontext (ohne Ausführung).</td></tr>
+<tr><td><code>script_path_for(script_id, subfolder) · resolve_script_path(script_id)</code></td><td>Pfad-Helfer; erlaubt volle Pfade oder <code>id</code> / <code>unterordner/id</code>.</td></tr>
+<tr><td><code>submit_task(task: PythonBridgeTask) → Result</code></td><td>Reicht einen Task in den Task Manager ein (Backpressure-Check; Ergebnis kommt über <code>task.done</code>).</td></tr>
+<tr><td><code>cancel_task(task_id) → bool</code></td><td>Bricht einen Task ab (Queue- oder In-Flight).</td></tr>
+<tr><td><code>get_task(task_id) → PythonBridgeTask</code></td><td>Task-Objekt nach ID (für Status/Ergebnis).</td></tr>
+<tr><td><code>hot_reload_script(script_id) → Result</code></td><td>Löst Hot Reload aus – je nach <code>hot_reload_mode</code>: <code>none</code> (deaktiviert), <code>reload_context</code> (Kontext wird invalidiert; Standard) oder <code>restart_instance</code> (Instanz neu starten).</td></tr>
+<tr><td><code>introspect_script(script_id, instance := "default") → Result</code></td><td>Fragt die Funktions-Signaturen per AST ab (ohne das Skript auszuführen); Basis für die Wrapper-Generierung.</td></tr>
+</table>
+
+<h3>4.3 PythonBridgeTask</h3>
+<p>
+Ein Task durchläuft die Zustände <code>QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED | TIMEOUT</code>.
+Ergebnis und Fehler sind über das Signal <code>done(result: PythonBridgeResult)</code> abrufbar (genau einmal pro Task).
+</p>
+<table>
+<tr><th>Feld</th><th>Beschreibung</th></tr>
+<tr><td><code>id · instance_id</code></td><td>Eindeutige Task-ID; <code>instance_id</code> = "" bedeutet Auto-Zuordnung an eine beliebige bereite Instanz.</td></tr>
+<tr><td><code>priority</code></td><td>Ganzzahl, 0 = höchste Priorität (stabile Reihenfolge bei gleicher Priorität).</td></tr>
+<tr><td><code>command</code></td><td><code>run</code> | <code>call</code> | <code>define</code></td></tr>
+<tr><td><code>context_id · source · function · args · kwargs · input</code></td><td>Ausführungsdaten des Tasks.</td></tr>
+<tr><td><code>timeout_ms</code></td><td>Maximale Gesamtlebensdauer (Queue + Ausführung); Überschreitung → <code>TIMEOUT</code>.</td></tr>
+<tr><td><code>max_retries · retries_left · retry_policy</code></td><td>Retry-Konfiguration (Policy: <code>none | connection_error | process_error | all</code>).</td></tr>
+<tr><td><code>batchable</code></td><td>Erlaubt dem Scheduler, den Task in ein Batch-Frame zu fassen (Standard true).</td></tr>
+<tr><td><code>result · meta · state</code></td><td>Endergebnis, Metadaten (z.&nbsp;B. <code>duration_ms</code>) und aktueller Zustand.</td></tr>
+</table>
+<p>
+Konstruktoren (statisch): <code>PythonBridgeTask.make_call(id, context, source, function, args, kwargs, timeout_ms, priority := 0)</code>,
+<code>make_run(...)</code>, <code>make_define(...)</code>.
+</p>
+
+<h3>4.4 BridgeInstance</h3>
+<p>
+Eine Instanz = ein Python-Subprozess + ein WebSocket-Kanal. Meist reicht die <code>PythonBridge</code>-Facade;
+für Spezialfälle kann man die Instanz direkt nutzen.
+</p>
+<table>
+<tr><th>Funktion</th><th>Beschreibung</th></tr>
+<tr><td><code>send_message(msg: Dictionary) → Error</code></td><td>Sendet eine Protokoll-Nachricht (nur im READY-Zustand).</td></tr>
+<tr><td><code>wait_ready(timeout := 180) → bool</code></td><td>Wartet (via <code>await</code> auf <code>process_frame</code>) bis READY.</td></tr>
+<tr><td><code>status_text() · is_active() · is_ready() · is_ready_immediately()</code></td><td>Zustandsprüfungen (siehe 4.1 für Status-Strings).</td></tr>
+<tr><td><code>last_error_message() → String</code></td><td>Letzter Fehlertext (Provisioning-/Verbindungsfehler).</td></tr>
+<tr><td><code>stop() · shutdown_now()</code></td><td>Graceful bzw. sofortiger Stop (inkl. Prozess-Kill bei Bedarf).</td></tr>
+</table>
+<p>
+<b>Signale:</b> <code>instance_ready</code> · <code>state_changed(instance, state)</code> · <code>message_received(instance, parsed)</code> · <code>lost(instance, error)</code>.
+Zustandsmaschine: <code>NONE → PROVISIONING → STARTING → CONNECTING → HANDSHAKE → READY</code>
+(bei Fehler/Crash: <code>CRASHED → RESTARTING → STARTING</code> mit Backoff, oder <code>ERROR</code>; bei Stop: <code>STOPPING → STOPPED</code>).
+</p>
+
+<h3>4.5 PythonBridgeResult</h3>
+<table>
+<tr><th>Feld</th><th>Beschreibung</th></tr>
+<tr><td><code>ok / is_ok() / is_error()</code></td><td>Erfolg? Fehler?</td></tr>
+<tr><td><code>status</code></td><td><code>"ok"</code>, <code>"error"</code> (Python-Exception), <code>"timeout"</code>, <code>"not_ready"</code>, <code>"down"</code> (Prozess getrennt), <code>"internal"</code> (Tool-Problem), <code>"cancelled"</code>.</td></tr>
+<tr><td><code>value</code></td><td>Ergebnis bei Erfolg (typisiert, siehe Kapitel 6).</td></tr>
+<tr><td><code>error</code></td><td>Dictionary <code>{code, type, message, traceback, task_id?, instance_id?}</code> bei Fehlern (Taxonomie in 9.2).</td></tr>
+<tr><td><code>error_message() · error_code()</code></td><td>Kurztext bzw. Fehlercode des Fehlers.</td></tr>
+<tr><td><code>request_id · task_id · instance_id · meta</code></td><td>Zuordnungs- und Meta-Daten (z.&nbsp;B. <code>duration_ms</code>).</td></tr>
+</table>
+
+<h2>5. Task Manager &amp; Scheduler</h2>
+
+<h3>5.1 Konfiguration (PythonBridgeConfig)</h3>
+<table>
+<tr><th>Schlüssel</th><th>Standard</th><th>Bedeutung</th></tr>
+<tr><td><code>autostart</code></td><td><code>false</code></td><td>Instanz(en) beim Plugin-Start automatisch hochziehen.</td></tr>
+<tr><td><code>workspace_dir</code></td><td><code>res://python_bridge</code></td><td>Workspace (scripts/, tmp/, config/, venv/, bridge/).</td></tr>
+<tr><td><code>python_executable</code></td><td><code>""</code></td><td>Leer = automatische Python-Erkennung.</td></tr>
+<tr><td><code>dependencies</code></td><td><code>[]</code></td><td>Zusätzliche pip-Pakete (z.&nbsp;B. <code>["numpy"]</code>).</td></tr>
+<tr><td><code>max_queued_tasks</code></td><td><code>1000</code></td><td>Backpressure: maximale Queue-Länge.</td></tr>
+<tr><td><code>max_inflight_per_instance</code></td><td><code>1</code></td><td>Maximale gleichzeitig laufende Einheiten pro Instanz.</td></tr>
+<tr><td><code>max_payload_bytes</code></td><td><code>64 MiB</code></td><td>Maximale Task-Payload (Quelle + Input/Args).</td></tr>
+<tr><td><code>task_timeout_ms</code></td><td><code>30000</code></td><td>Standard-Timeout für Tasks.</td></tr>
+<tr><td><code>max_retries · retry_policy · retry_delay_ms</code></td><td><code>0 · connection_error · 250</code></td><td>Retry-Konfiguration des Task Managers.</td></tr>
+<tr><td><code>max_batch_size · max_batch_delay_ms</code></td><td><code>32 · 32</code></td><td>Batch-Fenster: Größe und maximale Wartezeit.</td></tr>
+<tr><td><code>max_dispatch_per_frame · max_results_per_frame · max_inbox_size</code></td><td><code>16 · 64 · 512</code></td><td>Frame-Budgets des Schedulers; volle Inbox throttelt den Dispatch.</td></tr>
+<tr><td><code>connect_timeout_ms · provision_venv_timeout_ms · provision_pip_timeout_ms · shutdown_timeout_ms</code></td><td><code>20000 · 120000 · 300000 · 3000</code></td><td>Zeitlimits für Verbindung, Provisioning und Shutdown.</td></tr>
+<tr><td><code>health_check_interval_ms · health_missed_pong_limit</code></td><td><code>5000 · 3</code></td><td>Health Monitoring: Ping-Kadenz und verpasste Pongs bis zum Crash.</td></tr>
+<tr><td><code>max_restart_attempts · restart_base_delay_ms · restart_backoff_factor · stable_uptime_ms</code></td><td><code>3 · 500 · 2 · 30000</code></td><td>Crash-Restart: Versuche, Backoff (500→1000→2000 ms), Reset nach stabiler Laufzeit.</td></tr>
+<tr><td><code>hot_reload_mode</code></td><td><code>"reload_context"</code></td><td><code>none | reload_context | restart_instance</code>.</td></tr>
+<tr><td><code>auto_generate_wrappers · wrapper_dir</code></td><td><code>false · res://python_bridge/wrappers</code></td><td>Automatische Wrapper-Generierung (Standard: explizit) und Zielordner.</td></tr>
+</table>
+
+<h3>5.2 Verhalten</h3>
+<ul>
+  <li><b>Priorität:</b> 0 = höchste; stabile Reihenfolge (FIFO) bei gleicher Priorität.</li>
+  <li><b>Timeout:</b> ein Timer pro Task (Queue + Ausführung); bei Überschreitung wird ein <code>CANCEL</code> best-effort gesendet und der Task auf <code>TIMEOUT</code> gesetzt.</li>
+  <li><b>Cancel:</b> Queue-Tasks werden sofort entfernt; laufende Tasks werden markiert und als <code>CANCELLED</code> abgeschlossen (späte Ergebnisse werden verworfen).</li>
+  <li><b>Retry:</b> nur gemäß <code>retry_policy</code>; <code>retries_left</code> wird dekrementiert, der Task mit <code>retry_delay_ms</code> neu eingereiht.</li>
+  <li><b>Backpressure:</b> <code>max_queued_tasks</code> und <code>max_payload_bytes</code> lehnen Tasks mit strukturiertem Fehler ab (Queue voll / Payload zu groß).</li>
+  <li><b>Frame-Sync:</b> Ergebnisse landen in einer begrenzten Inbox; pro Frame werden max. <code>max_results_per_frame</code> verarbeitet. Ein wachsender Backlog throttle den Dispatch – stabile Framezeiten statt maximaler Antwortgeschwindigkeit.</li>
+  <li><b>Batching:</b> kompatible, batchbare Tasks derselben Priorität an dieselbe Instanz werden bis <code>max_batch_size</code> oder <code>max_batch_delay_ms</code> gesammelt. Ein einzelner Task wartet nie auf weitere; eine höhere Priorität bricht das Fenster ab. Reihenfolge und Semantik bleiben erhalten; ein Fehler innerhalb eines Batches betrifft nur den betroffenen Item (separate Ergebnisse).</li>
+  <li><b>Crash-Behandlung:</b> bei Verbindungsabbruch oder Prozess-Ende werden In-Flight-Tasks gemäß Policy gefailt oder erneut eingereiht; die Instanz startet mit Exponential Backoff neu (Counter-Reset nach <code>stable_uptime_ms</code>).</li>
+</ul>
+
+<h2>6. Datentransport &amp; Typen</h2>
+<p>
+Skalare bleiben lesbares JSON. Strukturierte Werte werden als getaggte Objekte <code>{"$pb": "&lt;tag&gt;", ...}</code>
+kodiert. Große Binär-Blobs (&gt; 512 Bytes) wandern nicht als Base64 in den JSON-Header, sondern als Binär-Chunks
+im Frame (<code>U32LE(Header-Länge) + HeaderJSON + [U32LE(Chunk-Länge) + Chunk]*</code>). Die Typ-Mapping-Tabelle
+ist zentral in <code>PythonBridgeTypeMapper</code> und um benutzerdefinierte Typen erweiterbar
+(<code>register(tag, encode_fn, decode_fn, custom_class := "")</code>).
+</p>
+<table>
+<tr><th>Python → Godot</th><th>Godot-Typ</th></tr>
+<tr><td><code>None / bool / int / float / str</code></td><td><code>null / bool / int / float / String</code></td></tr>
+<tr><td><code>list / tuple / set</code></td><td><code>Array</code></td></tr>
+<tr><td><code>dict</code></td><td><code>Dictionary</code> (Schlüssel müssen str/int/float/bool sein)</td></tr>
+<tr><td><code>bytes / bytearray</code></td><td><code>PackedByteArray</code></td></tr>
+<tr><td><code>numpy.ndarray (diverse dtypes)</code></td><td><code>PackedFloat64Array / PackedFloat32Array / PackedInt32Array / PackedInt64Array / PackedByteArray</code> (je nach dtype)</td></tr>
+<tr><td><code>numpy.integer / numpy.floating</code></td><td><code>int / float</code></td></tr>
+<tr><td>beliebiges anderes Objekt</td><td><code>String</code> (repr-Fallback, Tag <code>pyobject</code>)</td></tr>
+</table>
+<table>
+<tr><th>Godot → Python</th><th>Python-Typ</th></tr>
+<tr><td><code>Vector2/3/4 · Color · Transform3D</code></td><td><code>list</code> der Komponenten (z.&nbsp;B. <code>[x, y, z]</code>)</td></tr>
+<tr><td><code>PackedByteArray</code> (groß)</td><td><code>bytes</code> (als Chunk)</td></tr>
+<tr><td><code>PackedInt/Float-Arrays</code></td><td><code>bytes</code> (roh, für <code>numpy.frombuffer</code>)</td></tr>
+<tr><td><code>Array / Dictionary</code></td><td><code>list / dict</code></td></tr>
+<tr><td><code>Image</code></td><td>rohe Pixel-Daten + Metadaten (w, h, format)</td></tr>
+</table>
+<div class="note">
+<b>Endianness:</b> Längen-Präfixe im Binärformat sind Little-Endian auf beiden Seiten
+(<code>struct.pack("&lt;I", …)</code> in Python, <code>decode_u32</code> / explizite Byte-Kodierung in Godot).
+</div>
+
+<h2>7. Python-Seite</h2>
+
+<h3>7.1 Skript-Konventionen</h3>
+<ul>
+  <li><code>execute / execute_script</code>: Das Skript erhält die Eingabe in der Variablen <code>input</code> und legt das Ergebnis in <code>result</code> ab.</li>
+  <li><code>call_script</code>: Die benannte Funktion wird mit <code>args</code> / <code>kwargs</code> aufgerufen; ihr Rückgabewert geht an Godot.</li>
+  <li><b>Persistente Kontexte:</b> Jede <code>context_id</code> hat einen eigenen Namespace. Der Executor speichert einen Source-Hash; <code>call_script</code> re-definiert den Kontext nur, wenn sich der Quelltext geändert hat.</li>
+  <li><b>Fehler:</b> Python-Exceptions werden strukturiert gemeldet (<code>{code, type, message, traceback}</code>) – der Server-Prozess bleibt am Leben.</li>
+  <li><b>stdout/stderr:</b> werden pro Task erfasst und im Ergebnis mitgeliefert.</li>
+</ul>
+
+<h3>7.2 Aufbau des Python-Pakets</h3>
+<table>
+<tr><th>Datei</th><th>Zweck</th></tr>
+<tr><td><code>run_server.py</code></td><td>Entry-Point: CLI-Parameter (<code>--bind --port --tmpdir --tag</code>), startet den asyncio-Server.</td></tr>
+<tr><td><code>python_bridge/server.py</code></td><td>WebSocket-Server: routet <code>task / batch / cancel / reload / introspect / ping / hello / shutdown</code>; Nutzer-Code läuft in genau einem Worker-Thread pro Instanz, damit der Event-Loop reaktionsfähig bleibt; Watchdog beendet den Prozess nach Shutdown/Verbindungsabbruch.</td></tr>
+<tr><td><code>python_bridge/executor.py</code></td><td>Verwaltet Kontexte, führt <code>define / run / call</code> aus (Source-Hash), fängt Exceptions, capturet stdout/stderr, unterstützt Cancellation.</td></tr>
+<tr><td><code>python_bridge/introspection.py</code></td><td>AST-basierte Funktions-Signatur-Analyse (führt nie Code aus) – Grundlage der Wrapper-Generierung.</td></tr>
+<tr><td><code>python_bridge/protocol.py</code></td><td>v2-Nachrichtentypen und Batch-Item-Dekodierung.</td></tr>
+<tr><td><code>python_bridge/serializer.py</code></td><td><code>encode_obj / decode_obj</code>: typisierte Serialisierung inkl. NumPy-Arrays und Chunks.</td></tr>
+<tr><td><code>requirements.txt</code></td><td>Minimale Abhängigkeit: <code>websockets&gt;=11</code> (weitere Pakete pro Projekt konfigurierbar).</td></tr>
+</table>
+
+<h2>8. Editor-Integration</h2>
+<p>
+Das Plugin registriert den Autoload <code>PythonBridge</code> und hängt ein leichtgewichtiges Dock-Panel
+(rechts oben) an. Der Editor spricht ausschließlich mit der Facade – keinerlei Runtime-Logik im Editor.
+</p>
+<table>
+<tr><th>Element</th><th>Beschreibung</th></tr>
+<tr><td>Dock-Panel (<code>editor/python_editor.gd</code>)</td><td>Skriptliste (auto-refresh), <code>CodeEdit</code> mit Python-Syntax-Highlighting, Aktionen: <b>Save</b> · <b>Run</b> · <b>Generate wrapper</b> · <b>Hot reload</b> · <b>Refresh</b> · <b>New script</b>, Status + Log, mtime-Watcher für externe Änderungen.</td></tr>
+<tr><td>Syntax-Highlighting (<code>editor/python_syntax_highlighter.gd</code>)</td><td>Keywords, Builtins, Strings, Kommentare, Zahlen, Dekoratoren.</td></tr>
+<tr><td>Wrapper-Generator (<code>editor/wrapper_generator.gd</code>)</td><td>Deterministisch (gleiches Schema → identische Bytes); Marker-Header; überschreibt nur markierte Dateien; <code>class_name</code>-Kollisions-Check; Python-Defaults bleiben autoritativ (Sentinel-Check).</td></tr>
+</table>
+<p>
+<b>Wrapper-Beispiel:</b> Aus <code>def calculate(a: int, b: int) -> int: return a + b</code> erzeugt der Generator
+ein GDScript wie <code>bridge.calculate(2, 3)</code>. Der originale <code>.py</code>-Code bleibt unverändert und
+außerhalb von Godot lauffähig. Wrapper werden nur erzeugt, wenn man sie anfordert (Button bzw.
+<code>auto_generate_wrappers</code>).
+</p>
+
+<h2>9. Demo-Szene &amp; Beispiele</h2>
+<p>
+Das Repository enthält eine fertige Demo-Szene (<code>example/demo_scene.tscn</code>) mit Nodes und
+angehängten Skripten – öffnen und <b>F6</b> (Aktuelle Szene ausführen) drücken. Der Button
+<b>Bridge starten</b> startet die Python-Runtime, danach kann man die einzelnen Aspekte per Button
+ausprobieren. Jedes Demo-Node ist ein eigenes Skript unter <code>example/demo/</code>:
+</p>
+<table>
+<tr><th>Node / Skript</th><th>Demonstriert</th></tr>
+<tr><td><code>DemoRoot</code> – <code>demo_root.gd</code></td><td>Orchestriert Bridge-Start, Workspace-Sync (<code>example/scripts/*.py</code> → <code>python_bridge/scripts/</code>), Shutdown.</td></tr>
+<tr><td><code>DemoBasic</code> – <code>demo_basic.gd</code></td><td><code>call_script</code> (Args/Kwargs), <code>execute_script</code> (input/result), <code>define_script</code> – inkl. strukturierter Typen (Array, Dictionary).</td></tr>
+<tr><td><code>DemoTasks</code> – <code>demo_tasks.gd</code></td><td>Low-Level-Task-API: <code>PythonBridgeTask.make_call</code>, <code>submit_task</code>, <code>done</code>-Signal, Priorität, Timeout, <code>cancel_task</code>.</td></tr>
+<tr><td><code>DemoBatch</code> – <code>demo_batch.gd</code></td><td>8 schnelle Aufrufe → Task-Batching (max_batch_size/max_batch_delay_ms) mit erhaltener Reihenfolge.</td></tr>
+<tr><td><code>DemoErrors</code> – <code>demo_errors.gd</code></td><td>Strukturierte Fehler: Python-Exception (Typ/Message/Traceback/Task-ID), Timeout, unbekanntes Skript.</td></tr>
+<tr><td><code>DemoMulti</code> – <code>demo_multi.gd</code></td><td>Zweite Python-Instanz (<code>worker</code>) parallel zur Standard-Instanz, Task-Verteilung, Statusabfrage, Stop.</td></tr>
+</table>
+<p>
+Die Beispiel-Python-Skripte liegen in <code>example/scripts/</code>: <code>demo_skript.py</code> (calculate, greet,
+fibonacci, vector_list, boom, slow, big_blob) und <code>crash_skript.py</code> (<code>crash()</code> beendet den
+Python-Prozess absichtlich – zeigt Crash-Erkennung und Exponential-Backoff-Restart der Bridge).
+</p>
+
+<h2>10. Lebenszyklus, Provisioning &amp; Fehlerbehandlung</h2>
+
+<h3>9.1 Lebenszyklus &amp; Provisioning</h3>
+<ol>
+  <li><b>PROVISIONING</b> – Workspace-Ordner anlegen (<code>scripts/</code>, <code>tmp/</code>, <code>config/</code>), Python erkennen (≥ 3.8), Bridge-Python nach <code>python_bridge/bridge/</code> kopieren.</li>
+  <li><b>venv</b> – falls nicht vorhanden: <code>python -m venv …/venv</code> (nicht-blockierend, Timeout 120 s).</li>
+  <li><b>pip</b> – <code>pip install websockets&gt;=11</code> + konfigurierte Dependencies (Timeout 300 s, Log in <code>tmp/pip.log</code>), anschließend Import-Verifikation.</li>
+  <li><b>STARTING</b> – <code>run_server.py</code> als Subprozess starten; Server schreibt <code>tmp/&lt;instanz&gt;.json</code> (Port + PID).</li>
+  <li><b>CONNECTING → HANDSHAKE</b> – WebSocket-Verbindung aufbauen, <code>hello</code> senden.</li>
+  <li><b>READY</b> – <code>hello_ack</code> empfangen; Tasks sind jetzt möglich.</li>
+</ol>
+<p>
+<b>Crash &amp; Restart:</b> Ein unerwarteter WebSocket-Close oder ein toter Subprozess im READY-Zustand löst die
+Restart-Policy aus: <code>max_restart_attempts</code> Versuche mit Exponential Backoff
+(500 ms → 1000 ms → 2000 ms, konfigurierbar), Counter-Reset nach <code>stable_uptime_ms</code>. Es bleiben keine
+Zombie-Prozesse zurück (vor jedem Neustart wird ein eventuell noch laufender Prozess beendet).
+</p>
+<p>
+<b>Graceful Shutdown:</b> Beim Beenden von Godot (<code>shutdown()</code>/<code>_exit_tree</code>) werden neue Tasks
+blockiert, <code>shutdown</code> an alle Instanzen gesendet, auf <code>shutdown_ack</code> (bzw. Timeout
+<code>shutdown_timeout_ms</code>) gewartet und Prozesse notfalls zwangsweise beendet.
+</p>
+
+<h3>9.2 Fehler-Taxonomie</h3>
+<p>
+Jeder Fehler trägt einen Code aus der Taxonomie (<code>PythonBridgeErrorHandler</code>). Der Status eines
+<code>PythonBridgeResult</code> wird daraus abgeleitet.
+</p>
+<table>
+<tr><th>Code</th><th>Bedeutung</th><th>Status</th></tr>
+<tr><td><code>PYTHON_EXCEPTION</code> · <code>TASK_ERROR</code></td><td>Python-Exception bzw. Task-Fehler</td><td><code>error</code></td></tr>
+<tr><td><code>TIMEOUT_ERROR</code></td><td>Antwort kam nicht rechtzeitig</td><td><code>timeout</code></td></tr>
+<tr><td><code>PROCESS_ERROR</code> · <code>CONNECTION_ERROR</code></td><td>Prozess-/Verbindungsfehler</td><td><code>down</code></td></tr>
+<tr><td><code>DEPENDENCY_ERROR</code> · <code>SERIALIZATION_ERROR</code> · <code>PROTOCOL_ERROR</code> · <code>BRIDGE_ERROR</code></td><td>Infrastrukturfehler</td><td><code>internal</code></td></tr>
+</table>
+<p>
+Eine Python-Exception enthält mindestens: Exception-Typ, Message, Traceback, Task-ID, Instanz-ID – nie nur
+„Something went wrong“.
+</p>
+
+<h2>11. Troubleshooting</h2>
+<table>
+<tr><th>Problem / Status</th><th>Ursache &amp; Lösung</th></tr>
+<tr><td><code>status = "not_ready"</code></td><td>Instanz wurde nicht gestartet oder noch nicht READY – vor Aufrufen <code>await start_instance()</code> nutzen bzw. <code>wait_ready()</code>.</td></tr>
+<tr><td><code>status = "timeout"</code></td><td>Antwort kam nicht in <code>timeout_sec</code> (Standard 30 s). Timeout erhöhen oder Python-Code beschleunigen.</td></tr>
+<tr><td><code>status = "error"</code></td><td>Python-Exception im Nutzer-Code – Details in <code>result.error</code> (<code>type / message / traceback</code>).</td></tr>
+<tr><td><code>status = "down"</code></td><td>Python-Prozess getrennt (WebSocket geschlossen) – z.&nbsp;B. Absturz im Server oder <code>stop()</code>. Prozess-Log prüfen; die Instanz restartet gemäß Backoff-Konfiguration.</td></tr>
+<tr><td><code>status = "cancelled"</code></td><td>Task wurde vor Abschluss abgebrochen (<code>cancel_task</code> oder Shutdown).</td></tr>
+<tr><td>„Kein Python gefunden“</td><td><code>python_executable</code> setzen, <code>PYTHON_PATH</code> definieren oder Python zum <code>PATH</code> hinzufügen.</td></tr>
+<tr><td>venv/pip hängt</td><td>Timeout 120/300 s; Details in <code>python_bridge/tmp/pip.log</code>. Ggf. venv-Ordner löschen und neu provisionieren lassen.</td></tr>
+<tr><td>„Python-Prozess getrennt“ beim ersten Aufruf</td><td>Meist ein Server-/Protokollproblem beim Binär-Versand – Version von <code>addons/python_bridge/python</code> (Quelle) und <code>python_bridge/bridge</code> (Laufzeit-Kopie) muss identisch sein; das Plugin kopiert bei jedem Start automatisch.</td></tr>
+<tr><td>Werte kommen als String an</td><td>Objekt war nicht serialisierbar → <code>pyobject</code>-Fallback (repr). Nur JSON-fähige Typen, <code>bytes</code>, ndarray, Listen/Dicts verwenden.</td></tr>
+<tr><td>Compiler-Fehler „Could not resolve class … parser error“</td><td>Alter <code>.godot</code>-Cache aus einer früheren Addon-Version. Projekt einmal schließen, <code>.godot/</code> löschen und erneut öffnen (die <code>.uid</code>-Dateien sind im Repo enthalten).</td></tr>
+</table>
+
+<p class="small">
+Python Bridge v0.2.1 – dokumentiert nach dem Quellcode in <code>addons/python_bridge/</code>
+(Godot-Seite: <code>core/</code>, <code>editor/</code>; Python-Seite: <code>python/</code>). Weitere Details:
+<code>docs/ARCHITEKTUR.md</code>, <code>docs/API.md</code>, <code>docs/INSTALLATION.md</code>, <code>docs/TROUBLESHOOTING.md</code>,
+<code>docs/CHANGELOG.md</code>.
+</p>
+
+</body>
+</html>

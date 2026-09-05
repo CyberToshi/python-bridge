@@ -2,6 +2,20 @@
 
 ## v0.2.1 (current)
 
+### Neu: Demo-Szene & Dokumentations-PDF
+
+- **Demo-Szene** `example/demo_scene.tscn`: Nodes mit angehängten Skripten
+  (`example/demo/`), die alle Kernfunktionen der Bridge zeigen:
+  `DemoBasic` (call/execute/define_script), `DemoTasks` (Task-API,
+  Priorität, Timeout, Cancel), `DemoBatch` (Batching), `DemoErrors`
+  (strukturierte Fehler), `DemoMulti` (zwei Python-Instanzen parallel).
+  UI-Panel mit Buttons; Beispielskripte in `example/scripts/`
+  (`demo_skript.py`, `crash_skript.py` für den Crash-Restart-Test).
+- **Dokumentations-PDF** `docs/PythonBridge_Dokumentation.pdf` (16 Seiten,
+  im Stil der Original-PDF): Architektur, API-Referenz, Task Manager,
+  Batching, Datentransport, Python-Seite, Editor-Integration, Demo-Szene,
+  Lifecycle, Fehlerbehandlung, Troubleshooting.
+
 Stabilitäts-Fix für Godot 4.7.x (und neuer): Das Addon kompiliert jetzt
 fehlerfrei, wenn es als Autoload/Editor-Plugin geladen wird. Der Editor-
 Parser (Autoload-Pfad) akzeptiert einige Konstrukte nicht, die der normale

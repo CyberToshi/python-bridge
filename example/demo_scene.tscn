@@ -1,0 +1,97 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://example/demo/demo_root.gd" id="1_root"]
+[ext_resource type="Script" path="res://example/demo/demo_basic.gd" id="2_basic"]
+[ext_resource type="Script" path="res://example/demo/demo_tasks.gd" id="3_tasks"]
+[ext_resource type="Script" path="res://example/demo/demo_batch.gd" id="4_batch"]
+[ext_resource type="Script" path="res://example/demo/demo_errors.gd" id="5_errors"]
+[ext_resource type="Script" path="res://example/demo/demo_multi.gd" id="6_multi"]
+
+[node name="DemoRoot" type="Node"]
+script = ExtResource("1_root")
+
+[node name="DemoBasic" type="Node" parent="."]
+script = ExtResource("2_basic")
+
+[node name="DemoTasks" type="Node" parent="."]
+script = ExtResource("3_tasks")
+
+[node name="DemoBatch" type="Node" parent="."]
+script = ExtResource("4_batch")
+
+[node name="DemoErrors" type="Node" parent="."]
+script = ExtResource("5_errors")
+
+[node name="DemoMulti" type="Node" parent="."]
+script = ExtResource("6_multi")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Root" type="Control" parent="UI"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="UI/Root"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 760.0
+offset_bottom = 560.0
+
+[node name="VBox" type="VBoxContainer" parent="UI/Root/Panel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="UI/Root/Panel/VBox"]
+layout_mode = 2
+text = "Python Bridge — Demo"
+horizontal_alignment = 1
+
+[node name="Log" type="RichTextLabel" parent="UI/Root/Panel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+scroll_active = true
+scroll_following = true
+
+[node name="Buttons" type="HBoxContainer" parent="UI/Root/Panel/VBox"]
+layout_mode = 2
+
+[node name="BtnStart" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Bridge starten"
+
+[node name="BtnBasic" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Basic"
+
+[node name="BtnTasks" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Tasks"
+
+[node name="BtnBatch" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Batch"
+
+[node name="BtnErrors" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Fehler"
+
+[node name="BtnMulti" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Multi"
+
+[node name="BtnShutdown" type="Button" parent="UI/Root/Panel/VBox/Buttons"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Shutdown"
