@@ -48,6 +48,7 @@
     <li>Editor-Integration</li>
     <li>Lebenszyklus, Provisioning &amp; Fehlerbehandlung</li>
     <li>Troubleshooting</li>
+    <li>Bottlenecks</li>
   </ol>
 </div>
 
@@ -480,6 +481,32 @@ Eine Python-Exception enthält mindestens: Exception-Typ, Message, Traceback, Ta
 <tr><td>Werte kommen als String an</td><td>Objekt war nicht serialisierbar → <code>pyobject</code>-Fallback (repr). Nur JSON-fähige Typen, <code>bytes</code>, ndarray, Listen/Dicts verwenden.</td></tr>
 <tr><td>Compiler-Fehler „Could not resolve class … parser error“</td><td>Alter <code>.godot</code>-Cache aus einer früheren Addon-Version. Projekt einmal schließen, <code>.godot/</code> löschen und erneut öffnen (die <code>.uid</code>-Dateien sind im Repo enthalten).</td></tr>
 </table>
+
+<h2>Bottlenecks</h2>
+<p>
+Dieses Kapitel listet die konkreten Engpässe der Bridge auf: Performance, Latenz,
+Durchsatz und Zuverlässigkeit. Es ist kein Bug-Liste – es beschreibt, was die
+Bridge unter normaler Last kostet und wo die Grenzen liegen.
+</p>
+<ul>
+  <li><b>A1.</b> Eine Python-Instanz führt Aufgaben strikt seriell aus – ein Worker-Thread, ein Async-Event-Loop, <code>max_inflight_per_instance = 1</code>.</li>
+  <li><b>A2.</b> Ein einzelner Task, der nicht aufhört (Endlosschleife, blockierter GIL), verklemmt die ganze Instanz bis zum Neustart. CANCEL wirkt nur am Job-Start.</li>
+  <li><b>A3.</b> Der gesamte Skriptquelltext wird pro Aufruf neu gelesen, neu gesendet, neu JSON-kodiert und neu SHA-256-gehasht – auch wenn sich nichts geändert hat.</li>
+  <li><b>A4.</b> <code>execute</code> kompiliert den Python-Code pro Aufruf (kein Cache).</li>
+  <li><b>A5.</b> Vollständige JSON-/Typ-Dekodierung läuft im Haupt-Thread ohne pro-Frame-Byte-Budget (nur ein Nachrichten-Budget). Ein großer einzelner Ergebnis-Stopp kann einen Frame blockieren.</li>
+  <li><b>A6.</b> Numerische Arrays (PackedInt32Array, PackedFloat32Array etc.) reisen als JSON-Liste, nicht als Binär-Chunk – die häufigste Datentransport-Kategorie wird nicht optimal übertragen.</li>
+  <li><b>A7.</b> Pro-Element-Overhead: rekursive <code>isinstance</code>-Kette mit NumPy-Import-Check pro Element auf Python-Seite, rekursive Allokationen auf Godot-Seite, Base64 für kleine Blobs.</li>
+  <li><b>A8.</b> Der Timeout misst vom Aufgaben-Einreichen (Queue-Zeit inklusive), nicht vom Start der Ausführung.</li>
+  <li><b>A9.</b> Auto-Zuordnung an beliebige Instanzen kann Kontext-Zustand vertreiben und macht den Source-Hash-Cache der Instanz effektiv wirkungslos, wenn Aufrufe zwischen Instanzen hüpfen.</li>
+  <li><b>B1–B5.</b> Kalt-Start dauert Minuten (venv + pip + Server + Handshake), <code>OS.execute</code> auf dem Haupt-Thread während Provisioning und Crash-Handling, Hot-Reload über Instanz-Neustart ist teuer, <code>res://</code>-Workspace ist in Exporten schreibgeschützt.</li>
+  <li><b>C1–C4.</b> Harte pro-Frame-Budgets (Dispatch/Results/Inbox/Inflight) und O(n)-Operationen (Inbox pop_front, Timeout- und Batch-Window-Scans, sortierte Queue-Einreihung).</li>
+  <li><b>D1.</b> Alles ist JSON außer Blobs – der pro-Nachricht-Overhead dominiert auf localhost.</li>
+  <li><b>D2.</b> Python-Seite baut Binär-Frames mit O(n²)-Bytes-Konkatenation bei vielen Chunks.</li>
+  <li><b>D3–D4.</b> Redundante Zweit-Dekodierung der Task-Args auf Python-Seite; stdout/stderr und Ergebnisse sind unbeschränkt.</li>
+</ul>
+<p class="small">
+Für Details, Größenordnungen, Standardwerte und Dateinamen: <code>docs/BOTTLENECKS.md</code>.
+</p>
 
 <p class="small">
 Python Bridge v0.2.1 – dokumentiert nach dem Quellcode in <code>addons/python_bridge/</code>

@@ -13,6 +13,11 @@
   Godot-Neulinge nachvollziehbar.
 - **Praxis-Doku ergänzt** (`docs/PRAXIS.md`): Button-Übersicht des Docks
   und Workflow-Checkliste mit allen Editor-Schritten.
+- **Bottlenecks dokumentiert** (`docs/BOTTLENECKS.md` + Kapitel 11 in der
+  PDF): alle konkreten Engpässe der Bridge — Serienquote pro Instanz,
+  verklemmte Worker, pro-Aufruf-Quelltext-Neusendung/-neuhash, HauptThread-
+  Dekodierung ohne Byte-Budget, numerische Arrays per JSON, eigenständiges
+  Kapitel mit A/B/C/D-Kategorien, Größenordnungen und Dateinamen.
 
 ## v0.2.1 (current)
 
