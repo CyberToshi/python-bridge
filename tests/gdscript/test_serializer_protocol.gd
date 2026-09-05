@@ -55,6 +55,71 @@ func test_text_frame_roundtrip() -> void:
 	assert_eq(parsed["data"]["args"][0], 1)
 	assert_eq(parsed["data"]["args"][2], "x")
 
+func test_large_float32_array_uses_binary_chunk() -> void:
+	var chunks: Array = []
+	var arr := PackedFloat32Array()
+	arr.resize(1024)   # 4096 bytes > INLINE_LIMIT (512)
+	for i in arr.size():
+		arr[i] = float(i) * 0.5
+	var enc: Variant = PythonBridgeSerializer.encode(arr, chunks)
+	assert_eq(chunks.size(), 1, "large numeric array becomes one binary chunk")
+	assert_true(enc is Dictionary)
+	assert_eq((enc as Dictionary)[PythonBridgeSerializer.TAG], "f32")
+	assert_eq((enc as Dictionary)["nbytes"], 4096)
+	assert_true((enc as Dictionary).has("chunk"), "descriptor references chunk stream")
+	assert_false((enc as Dictionary).has("v"), "no JSON number list for large arrays")
+	var back: Variant = PythonBridgeSerializer.decode(enc, chunks)
+	assert_true(back is PackedFloat32Array)
+	assert_eq((back as PackedFloat32Array).size(), 1024)
+	assert_eq((back as PackedFloat32Array)[7], 3.5)
+	assert_eq((back as PackedFloat32Array)[1023], 511.5)
+
+func test_small_numeric_array_stays_inline() -> void:
+	var chunks: Array = []
+	var small := PackedFloat32Array([1.0, 2.5, -3.0])
+	var enc: Variant = PythonBridgeSerializer.encode(small, chunks)
+	assert_eq(chunks.size(), 0, "small array stays in the JSON header")
+	var back: Variant = PythonBridgeSerializer.decode(enc, chunks)
+	assert_true(back is PackedFloat32Array)
+	assert_eq((back as PackedFloat32Array)[1], 2.5)
+
+func test_large_int32_chunk_roundtrip() -> void:
+	var chunks: Array = []
+	var arr := PackedInt32Array()
+	arr.resize(600)
+	for i in arr.size():
+		arr[i] = i - 300
+	var enc: Variant = PythonBridgeSerializer.encode(arr, chunks)
+	assert_eq(chunks.size(), 1)
+	assert_eq((enc as Dictionary)["nbytes"], 2400)
+	var back: Variant = PythonBridgeSerializer.decode(enc, chunks)
+	assert_true(back is PackedInt32Array)
+	assert_eq((back as PackedInt32Array)[0], -300)
+	assert_eq((back as PackedInt32Array)[599], 299)
+
+func test_numeric_chunk_size_mismatch_is_detected() -> void:
+	var chunks: Array = []
+	# Descriptor claims 4096 bytes but the chunk only carries 8 -> detection.
+	var wrong := PackedByteArray()
+	wrong.resize(8)
+	chunks.append(wrong)
+	var enc := {PythonBridgeSerializer.TAG: "f32", "nbytes": 4096, "chunk": 0}
+	var back: Variant = PythonBridgeSerializer.decode(enc, chunks)
+	assert_true(back is PackedFloat32Array)
+	assert_eq((back as PackedFloat32Array).size(), 0,
+		"corrupt chunk materializes empty, not garbage")
+
+func test_ndarray_nbytes_validation() -> void:
+	var chunks: Array = []
+	var wrong := PackedByteArray()
+	wrong.resize(8)
+	chunks.append(wrong)
+	var desc := {PythonBridgeSerializer.TAG: "ndarray", "dtype": "float32",
+		"shape": [100], "nbytes": 400, "chunk": 0}
+	var back: Variant = PythonBridgeSerializer.decode(desc, chunks)
+	assert_true(back is PackedFloat32Array)
+	assert_eq((back as PackedFloat32Array).size(), 0)
+
 func test_binary_frame_roundtrip() -> void:
 	var chunks: Array = []
 	var big := PackedByteArray()

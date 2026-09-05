@@ -47,13 +47,13 @@ static func encode(v: Variant, chunks: Array) -> Variant:
 		TYPE_PACKED_BYTE_ARRAY:
 			return _encode_blob(v, chunks, "bytes")
 		TYPE_PACKED_INT32_ARRAY:
-			return {TAG: "i32", "v": v}
+			return _encode_numeric_chunk_or(v, chunks, "i32", "s32", 4)
 		TYPE_PACKED_INT64_ARRAY:
-			return {TAG: "i64", "v": v}
+			return _encode_numeric_chunk_or(v, chunks, "i64", "s64", 8)
 		TYPE_PACKED_FLOAT32_ARRAY:
-			return {TAG: "f32", "v": v}
+			return _encode_numeric_chunk_or(v, chunks, "f32", "float", 4)
 		TYPE_PACKED_FLOAT64_ARRAY:
-			return {TAG: "f64", "v": v}
+			return _encode_numeric_chunk_or(v, chunks, "f64", "double", 8)
 		TYPE_PACKED_VECTOR2_ARRAY, TYPE_PACKED_VECTOR3_ARRAY, TYPE_PACKED_COLOR_ARRAY:
 			var arr: Array = []
 			for x in v:
@@ -69,6 +69,30 @@ static func encode(v: Variant, chunks: Array) -> Variant:
 			if enc.is_valid():
 				return enc.call(v, chunks)
 	return {TAG: "unsupported", "type": type_string(typeof(v))}
+
+## Numeric packed arrays: kleine Arrays bleiben JSON-Zahlenlisten (legacy),
+## groessere wandern als Little-Endian-Rohbytes in den Binary-Chunk-Stream.
+## Damit laufen grosse Float-/Int-Arrays nicht als JSON-Zahlenliste (D1).
+static func _encode_numeric_chunk_or(v: Variant, chunks: Array, tag: String, codec: String, item_size: int) -> Variant:
+	if v.size() * item_size <= INLINE_LIMIT:
+		return {TAG: tag, "v": v}
+	var raw := PackedByteArray()
+	raw.resize(v.size() * item_size)
+	for i in v.size():
+		match codec:
+			"s32": raw.encode_s32(i * item_size, v[i])
+			"s64": raw.encode_s64(i * item_size, v[i])
+			"float": raw.encode_float(i * item_size, v[i])
+			"double": raw.encode_double(i * item_size, v[i])
+	return _numeric_chunk(raw, chunks, tag)
+
+## Descriptor fuer einen numerischen Rohbyte-Block. `nbytes` ist die
+## deklarierte Groesse zur Validierung auf der Gegenseite; die Daten liegen
+## im Chunk-Stream, nicht im JSON-Header.
+static func _numeric_chunk(raw: PackedByteArray, chunks: Array, tag: String) -> Dictionary:
+	var desc := {TAG: tag, "nbytes": raw.size(), "chunk": chunks.size()}
+	chunks.append(raw)
+	return desc
 
 static func _encode_blob(v: PackedByteArray, chunks: Array, tag: String) -> Dictionary:
 	var desc := {TAG: tag}
@@ -136,14 +160,30 @@ static func decode(v: Variant, chunks: Array) -> Variant:
 			"u16":
 				return _decode_u16(v, chunks)
 			"i32":
+				if v.has("chunk"):
+					return _decode_numeric_chunk(v, chunks, "int32")
 				return PackedInt32Array(Array(v["v"]))
 			"u32", "u64":
 				return PackedInt64Array(Array(v["v"]))
 			"i64":
+				if v.has("chunk"):
+					return _decode_numeric_chunk(v, chunks, "int64")
 				return PackedInt64Array(Array(v["v"]))
+			"i16":
+				if v.has("chunk"):
+					return _decode_numeric_chunk(v, chunks, "int16")
+				return _decode_s16(v, chunks)
+			"u16":
+				if v.has("chunk"):
+					return _decode_numeric_chunk(v, chunks, "uint16")
+				return _decode_u16(v, chunks)
 			"f32":
+				if v.has("chunk"):
+					return _decode_numeric_chunk(v, chunks, "float32")
 				return PackedFloat32Array(Array(v["v"]))
 			"f64":
+				if v.has("chunk"):
+					return _decode_numeric_chunk(v, chunks, "float64")
 				return PackedFloat64Array(Array(v["v"]))
 			"ndarray":
 				return _decode_ndarray(v, chunks)
@@ -175,12 +215,42 @@ static func _decode_blob(v: Dictionary, chunks: Array) -> PackedByteArray:
 		return chunks[int(v["chunk"])]
 	return Marshalls.base64_to_raw(v.get("b", ""))
 
+## Chunk-Form numerischer Tags: Rohbytes + deklarierte nbytes. Validiert die
+## Groesse gegen den Descriptor (Korruptionserkennung) und materialisiert in
+## den passenden Packed-Typ. Kleine Arrays kommen weiterhin als "v"-Liste.
+static func _decode_numeric_chunk(v: Dictionary, chunks: Array, dtype: String) -> Variant:
+	var data := _decode_blob(v, chunks)
+	var bpe := _bytes_per_element(dtype)
+	if data.size() % maxi(bpe, 1) != 0:
+		push_error("[PythonBridge] Numeric chunk size %d not aligned to %s (%d bytes/elem)" % [data.size(), dtype, bpe])
+		return _empty_packed(dtype)
+	if v.has("nbytes") and int(v["nbytes"]) != data.size():
+		push_error("[PythonBridge] Numeric chunk descriptor mismatch: declared %d bytes, got %d" % [int(v["nbytes"]), data.size()])
+		return _empty_packed(dtype)
+	return _packed_from(dtype, data, data.size() / maxi(bpe, 1))
+
+static func _empty_packed(dtype: String) -> Variant:
+	match dtype:
+		"float32": return PackedFloat32Array()
+		"float64": return PackedFloat64Array()
+		"int32": return PackedInt32Array()
+		"int64": return PackedInt64Array()
+		"int16", "uint16": return PackedInt32Array()
+	return PackedByteArray()
+
 ## NumPy-ndarray: Shape 1 -> PackedArray; >1 -> Array von Zeilen (shape[0]).
 static func _decode_ndarray(v: Dictionary, chunks: Array) -> Variant:
 	var data := _decode_blob(v, chunks)
 	var dtype: String = str(v.get("dtype", "float64"))
 	var shape: Array = v.get("shape", [])
 	var bpe := _bytes_per_element(dtype)
+	# Validierung (Dtype-/Shape-/nbytes-Konsistenz) vor der Materialisierung:
+	# ein verwaister/verfaelschter Chunk darf keine falschen Typed Arrays
+	# erzeugen.
+	var declared := int(v.get("nbytes", 0))
+	if declared > 0 and declared != data.size():
+		push_error("[PythonBridge] ndarray descriptor mismatch: declared %d bytes, chunk has %d" % [declared, data.size()])
+		return _empty_packed(dtype)
 	var count := data.size() / maxi(bpe, 1)
 	if shape.size() == 1:
 		return _packed_from(dtype, data, int(shape[0]))

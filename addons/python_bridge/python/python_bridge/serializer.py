@@ -110,9 +110,14 @@ def decode_obj(value, chunks: list):
                 return _blob_from(value, chunks)
             if t == "ndarray":
                 return decode_ndarray(value, chunks)
-            # PackedArrays: numerische Blobs als bytes / liste
-            if t in ("i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64"):
-                return _blob_from(value, chunks)
+            # Numerische Godot-PackedArrays: kleine kommen als JSON-Zahlenliste
+            # ("v"), grosse als Little-Endian-Rohbytes im Chunk-Stream. Mit
+            # NumPy werden grosse Chunks zu ndarray materialisiert, sonst
+            # bleiben sie raw bytes (transparenter, dokumentierter Fallback).
+            if t in _NUMERIC_TAGS:
+                if "v" in value:
+                    return list(value["v"])
+                return _decode_numeric(value, chunks)
             return None
         return {k: decode_obj(v, chunks) for k, v in value.items()}
     if isinstance(value, list):
@@ -126,6 +131,37 @@ def _blob_from(v: dict, chunks: list):
     return base64.b64decode(v.get("b", "").encode("ascii"))
 
 
+# Numerische Tags, die als Godot-PackedArray eintreffen koennen.
+_NUMERIC_TAGS = ("i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
+                 "f32", "f64")
+
+# Tag -> numpy dtype Name fuer die Chunk-Materialisierung.
+_NUMERIC_DTYPES = {"f32": "float32", "f64": "float64", "i32": "int32",
+                    "i64": "int64", "i16": "int16", "u16": "uint16",
+                    "i8": "int8", "u8": "uint8"}
+
+
+def _decode_numeric(value: dict, chunks: list):
+    """Chunk-Form eines numerischen Tags -> numpy-Array (falls verfuegbar)
+    bzw. raw bytes. Fuer i8/u8 bleibt es bei bytes (Byte-Blob-Semantik)."""
+    blob = _blob_from(value, chunks)
+    declared = value.get("nbytes")
+    if declared is not None and int(declared) != len(blob):
+        return blob  # Descriptor-Mismatch: raw fallback, keine stille Garbage
+    tag = value.get(TAG, "")
+    if tag in ("i8", "u8"):
+        return blob
+    np = _try_numpy()
+    if np is not None:
+        dtype = _NUMERIC_DTYPES.get(tag)
+        if dtype is not None:
+            try:
+                return np.frombuffer(blob, dtype=np.dtype(dtype))
+            except Exception:  # pragma: no cover - defensive
+                pass
+    return blob
+
+
 def decode_ndarray(v: dict, chunks: list):
     """ndarray-Tag -> numpy-Array (falls verfügbar) bzw. raw bytes."""
     dtype = v.get("dtype", "float64")
@@ -134,6 +170,13 @@ def decode_ndarray(v: dict, chunks: list):
     np = _try_numpy()
     if np is not None:
         try:
+            # nbytes-Validierung: deklarierte Groesse muss zur Chunk-Groesse
+            # passen (Korruptionserkennung, bevor reshape materialisiert).
+            declared = v.get("nbytes")
+            if declared is not None and int(declared) != len(raw):
+                raise ValueError(
+                    "ndarray descriptor mismatch: declared %d bytes, got %d"
+                    % (int(declared), len(raw)))
             arr = np.frombuffer(raw, dtype=np.dtype(dtype))
             if shape:
                 arr = arr.reshape(shape)
