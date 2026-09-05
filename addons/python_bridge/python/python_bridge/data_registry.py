@@ -19,6 +19,8 @@ ein coarse Lock schuetzt zusaetzlich die RELEASE-Antwort aus dem
 Event-Loop-Thread gegen einen gleichzeitigen Store.
 """
 
+import hashlib
+import os
 import threading
 
 # Kategorien, die als DataRef gespeichert werden koennen.
@@ -27,11 +29,45 @@ SUPPORTED_KINDS = ("ndarray",)
 TAG = "$pb"
 
 
-class DataStore:
-    """Holds large reusable results keyed by a bridge-generated data id."""
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
-    def __init__(self, threshold_bytes=0):
+
+def cleanup_orphan_files(file_dir, tag):
+    """Entfernt verwaiste Daten-Dateien einer Instanz (Crash-Cleanup beim
+    Serverstart). Liefert die Anzahl entferner Dateien."""
+    if not file_dir or not os.path.isdir(file_dir):
+        return 0
+    prefix = "data-%s-" % tag
+    removed = 0
+    try:
+        for name in os.listdir(file_dir):
+            if name.startswith(prefix) and name.endswith(".bin"):
+                try:
+                    os.remove(os.path.join(file_dir, name))
+                    removed += 1
+                except OSError:  # pragma: no cover
+                    pass
+    except OSError:  # pragma: no cover
+        pass
+    return removed
+
+
+class DataStore:
+    """Holds large reusable results keyed by a bridge-generated data id.
+
+    Phase 4: Zusaetzlich zum In-Memory-Halten kann der Datensatz in eine
+    Datei unter `file_dir` geschrieben werden (ein FileAccess-Gegenstueck in
+    Godot kann ihn ohne WebSocket-Transfer chunkweise lesen). `tag` ist der
+    Instanzname und macht Dateinamen ueber parallele Instanzen hinweg
+    eindeutig. Dateien werden bei release()/clear() entfernt; verwaiste
+    Dateien (Crash) raeumt der Server beim Start auf.
+    """
+
+    def __init__(self, threshold_bytes=0, file_dir=None, tag=""):
         self.threshold_bytes = int(threshold_bytes or 0)
+        self.file_dir = file_dir
+        self.tag = tag
         self._lock = threading.Lock()
         self._values = {}
         self._meta = {}
@@ -75,12 +111,43 @@ class DataStore:
             }
         return None
 
+    def _file_path(self, data_id):
+        if not self.file_dir:
+            return None
+        return os.path.join(self.file_dir, "data-%s-%s.bin" % (self.tag, data_id))
+
+    def _write_file(self, value, data_id, nbytes):
+        """Schreibt die Rohbytes in eine Datei (sha256 als Integritaetsmerkmal).
+        Fehler sind nicht fatal: der Datensatz bleibt In-Memory verfuegbar."""
+        try:
+            os.makedirs(self.file_dir, exist_ok=True)
+            raw = value.tobytes(order="C")
+            if len(raw) != nbytes:
+                return None
+            digest = _sha256_bytes(raw)
+            path = self._file_path(data_id)
+            with open(path, "wb") as f:
+                f.write(raw)
+            return {"file_path": path, "file_size": nbytes,
+                    "file_sha256": digest}
+        except Exception:  # pragma: no cover - defensiv (Schreibfehler)
+            return None
+
+    def _delete_file(self, data_id):
+        path = self._file_path(data_id)
+        if path:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:  # pragma: no cover
+                pass
+
     def _store(self, value, kind, nbytes):
         """Lock must be held by the caller."""
         self._seq += 1
         data_id = "data-%d" % self._seq
         self._values[data_id] = value
-        self._meta[data_id] = {
+        meta = {
             "id": data_id,
             "kind": kind,
             "dtype": str(value.dtype) if kind == "ndarray" else "uint8",
@@ -88,6 +155,10 @@ class DataStore:
             "nbytes": nbytes,
             "readonly": True,
         }
+        file_info = self._write_file(value, data_id, nbytes)
+        if file_info:
+            meta.update(file_info)
+        self._meta[data_id] = meta
         return data_id
 
     # ------------------------------------------------------------- access path
@@ -101,16 +172,40 @@ class DataStore:
             return dict(meta) if meta is not None else None
 
     def release(self, data_id):
-        """Frees the backing store. Returns True when it existed."""
+        """Frees the backing store (inkl. Datei). Returns True when it existed."""
         with self._lock:
             had_value = self._values.pop(data_id, None) is not None
             self._meta.pop(data_id, None)
-            return had_value
+        if had_value:
+            self._delete_file(data_id)
+        return had_value
 
     def clear(self):
+        """Gibt alles frei (inkl. aller Daten-Dateien dieser Instanz)."""
         with self._lock:
+            data_ids = list(self._values.keys())
             self._values.clear()
             self._meta.clear()
+        for data_id in data_ids:
+            self._delete_file(data_id)
+
+    def file_info(self, data_id):
+        """Datei-Metadaten eines Handles (wenn file-backed)."""
+        with self._lock:
+            meta = self._meta.get(data_id)
+            if meta is None:
+                return None
+            path = meta.get("file_path")
+            if not path or not os.path.exists(path):
+                return None
+            return {
+                "path": path,
+                "size": int(meta.get("file_size", 0)),
+                "sha256": meta.get("file_sha256", ""),
+                "dtype": meta.get("dtype", "float64"),
+                "shape": list(meta.get("shape", [])),
+                "nbytes": int(meta.get("nbytes", 0)),
+            }
 
     def count(self):
         with self._lock:

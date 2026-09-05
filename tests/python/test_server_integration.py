@@ -568,6 +568,137 @@ class ServerIntegrationTest(unittest.TestCase):
                 proc.kill()
                 proc.wait(timeout=5)
 
+    def test_file_backed_materialization(self):
+        """DATA_GET mit want=file: Godot erhaelt einen Datei-Descriptor statt
+        der Rohdaten; Release loescht die Datei; fehlende Datei -> Fallback."""
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover
+            self.skipTest("numpy not available")
+        import os
+        proc, port = self._spawn(["--data-ref-threshold-bytes", "32"], tag="fw")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src = ("import numpy as np\n"
+                       "result = np.arange(64, dtype=np.float32)\n")
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "fd1",
+                    "command": "run", "context": "filectx",
+                    "source": src, "data": {"input": None}}))
+                msg = await self._recv_head(ws)
+                desc = msg["data"]
+                self.assertEqual(desc.get("$pb"), "data_ref")
+                ref_id = desc["id"]
+
+                # File transport: descriptor only, no data over the socket.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_DATA_GET,
+                    "id": "fg1", "ref_id": ref_id, "want": "file"}))
+                msg = await self._recv_head(ws)
+                self.assertEqual(msg["type"], protocol.MSG_DATA_RESULT)
+                self.assertEqual(msg["status"], "ok")
+                finfo = msg["data"]
+                self.assertEqual(finfo["transport"], "file")
+                self.assertTrue(os.path.exists(finfo["path"]),
+                                "file transport points at a real file")
+                self.assertEqual(finfo["nbytes"], 256)
+                self.assertEqual(finfo["dtype"], "float32")
+                with open(finfo["path"], "rb") as f:
+                    raw = f.read()
+                import hashlib
+                self.assertEqual(
+                    finfo["sha256"], hashlib.sha256(raw).hexdigest())
+                self.assertTrue(np.array_equal(
+                    np.frombuffer(raw, dtype=np.float32),
+                    np.arange(64, dtype=np.float32)))
+
+                # Release loescht die Datei.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_DATA_RELEASE,
+                    "id": "fr1", "ref_id": ref_id}))
+                msg, _ = await self._recv(ws)
+                self.assertEqual(msg["freed"], True)
+                self.assertFalse(os.path.exists(finfo["path"]),
+                                 "release deletes the data file")
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_file_transport_falls_back_when_file_missing(self):
+        """Fehlt die Datei (extern entfernt), liefert want=file transparent den
+        normalen (chunked) Transfer - kein Fehler, keine tote Referenz."""
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover
+            self.skipTest("numpy not available")
+        import os
+        proc, port = self._spawn(["--data-ref-threshold-bytes", "32"], tag="fb")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src = ("import numpy as np\n"
+                       "result = np.arange(64, dtype=np.float32)\n")
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "fd2",
+                    "command": "run", "context": "fctx2",
+                    "source": src, "data": {"input": None}}))
+                msg = await self._recv_head(ws)
+                ref_id = msg["data"]["id"]
+                # Datei hinter dem Server entfernen, dann Datei-Transfer anfordern.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_DATA_GET,
+                    "id": "fg2", "ref_id": ref_id, "want": "file"}))
+                fmsg = await self._recv_head(ws)
+                file_path = fmsg["data"]["path"]
+                os.remove(file_path)
+
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_DATA_GET,
+                    "id": "fg3", "ref_id": ref_id, "want": "file"}))
+                msg, data = await self._recv(ws)
+                self.assertEqual(msg["status"], "ok")
+                self.assertFalse(
+                    isinstance(data, dict) and data.get("transport") == "file",
+                    "fallback must deliver the real data")
+                self.assertTrue(np.array_equal(
+                    data, np.arange(64, dtype=np.float32)))
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_orphan_data_files_cleaned_on_server_start(self):
+        """Crash-Cleanup: verwaiste Daten-Dateien der Instanz werden beim
+        Serverstart entfernt (kein Muelle-Sammeln ueber Prozessgrenzen)."""
+        import os
+        data_dir = os.path.join(self._tmpdir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        stale = os.path.join(data_dir, "data-fb-orphan-99.bin")
+        with open(stale, "wb") as f:
+            f.write(b"\x00" * 128)
+        proc, port = self._spawn([], tag="fb")
+        try:
+            self.assertFalse(
+                os.path.exists(stale),
+                "server start must remove orphaned data files")
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
     def test_shutdown_ack(self):
         async def run():
             async with self._connect() as ws:

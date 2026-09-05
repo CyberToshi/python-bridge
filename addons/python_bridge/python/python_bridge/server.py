@@ -23,7 +23,7 @@ from functools import partial
 import websockets
 
 from . import protocol, executor, introspection
-from .data_registry import DataStore
+from .data_registry import DataStore, cleanup_orphan_files
 from .serializer import encode_obj
 
 VERSION = "0.2.0"
@@ -70,7 +70,14 @@ async def _handle_connection(ws, state):
         max_stdout_bytes=caps.get("max_stdout_bytes", executor.DEFAULT_MAX_STDOUT_BYTES),
         max_stderr_bytes=caps.get("max_stderr_bytes", executor.DEFAULT_MAX_STDERR_BYTES))
     max_result_bytes = int(caps.get("max_result_bytes", DEFAULT_MAX_RESULT_BYTES))
-    data_store = DataStore(int(caps.get("data_ref_threshold_bytes", 0) or 0))
+    # Phase 4: grosse Datenrefs zusaetzlich als Datei ablegen (Godot liest
+    # sie chunkweise per FileAccess, ohne WebSocket-Transfer). Dateinamen
+    # sind pro Instanz-Tag eindeutig; Verzeichnis liegt im Instanz-Tmpdir.
+    file_dir = os.path.join(str(state.get("tmpdir", "")), "data")
+    data_store = DataStore(
+        int(caps.get("data_ref_threshold_bytes", 0) or 0),
+        file_dir=file_dir if state.get("tmpdir") else None,
+        tag=str(state.get("tag", "")))
     # Phase 3: mehrere Worker-Slots pro Instanz. Tasks unterschiedlicher
     # Contexts koennen parallel laufen (I/O, NumPy); gleiche Contexts werden
     # ueber Context-Locks serialisiert. Default 1 = bisherige Semantik.
@@ -237,15 +244,39 @@ def _ref_or_encode(value, data_store, chunks):
     return _encode_with_chunks(value, chunks)
 
 
-def _job_fn(host, message):
-    """Fuehrt eine Task-/Batch-Message unter den Context-Locks aus. Laueft im
-    Worker-Thread: gleiche Contexts serialisieren sich (geteilte Namespaces),
-    verschiedene Contexts koennen parallel laufen."""
+def _job_fn(host, data_store, message):
+    """Fuehrt eine Task-/Batch-Message unter den Context-Locks aus UND kodiert
+    das Ergebnis (inkl. Auto-DataRef-/Datei-Entscheidung) im Worker-Thread.
+    Damit blockieren grosse tobytes()-/Datei-Schreibvorgaenge nie den
+    Event-Loop (Phase 4)."""
     with host.acquire_contexts(host.unique_contexts(message)):
         if message.get("type") == protocol.MSG_BATCH:
-            return [host.execute_job(item)
-                    for item in message.get(protocol.FIELD_ITEMS, [])]
-        return host.execute_job(message)
+            chunks = []
+            out_items = []
+            for item in message.get(protocol.FIELD_ITEMS, []):
+                body = host.execute_job(item)
+                item_id = str(item.get("id", ""))
+                entry = {"id": item_id, "ms": body["ms"],
+                         "stdout": body.get("stdout", ""),
+                         "stderr": body.get("stderr", ""),
+                         "stdout_truncated": bool(body.get("stdout_truncated", False)),
+                         "stderr_truncated": bool(body.get("stderr_truncated", False))}
+                if body["status"] == "ok":
+                    entry["status"] = "ok"
+                    entry["data"] = _ref_or_encode(body["data"], data_store, chunks)
+                else:
+                    entry["status"] = "error"
+                    entry["error"] = body.get("error") or {
+                        "code": protocol.CATEGORY_TASK_ERROR,
+                        "type": "Error", "message": "unknown", "traceback": ""}
+                out_items.append(entry)
+            return {"batch": True, "msg_id": str(message.get("id", "")),
+                    "items": out_items, "chunks": chunks}
+        body = host.execute_job(message)
+        chunks = []
+        if body["status"] == "ok":
+            body["data"] = _ref_or_encode(body["data"], data_store, chunks)
+        return {"batch": False, "body": body, "chunks": chunks}
 
 
 def _register_stuck(stuck, future, loop, runaway_grace_ms):
@@ -256,61 +287,17 @@ def _register_stuck(stuck, future, loop, runaway_grace_ms):
 
 async def _run_job(ws, send_lock, loop, executor_pool, host, data_store, message,
                    max_result_bytes, stuck, runaway_grace_ms):
-    """Runs one task or batch message in the worker thread and responds."""
+    """Runs one task or batch message in the worker thread and responds.
+    Das Ergebnis kommt bereits kodiert (data/chunks) aus dem Worker zurueck."""
     msg_id = str(message.get("id", ""))
     timeout_ms = int(message.get("timeout_ms", 0) or 0)
     timeout = timeout_ms / 1000.0 if timeout_ms > 0 else None
 
-    if message.get("type") == protocol.MSG_BATCH:
-        items = message.get(protocol.FIELD_ITEMS, [])
-        future = loop.run_in_executor(executor_pool, _job_fn, host, message)
-        try:
-            # shield: wait_for darf das Future NICHT canceln - der Watchdog
-            # muss den weiterlaufenden (nicht killbaren) Thread erkennen.
-            bodies = await asyncio.wait_for(asyncio.shield(future), timeout)
-        except asyncio.TimeoutError:
-            _register_stuck(stuck, future, loop, runaway_grace_ms)
-            await _send_text(ws, send_lock, _task_error_body(
-                msg_id, protocol.CATEGORY_TIMEOUT_ERROR,
-                "Batch timeout after %d ms" % timeout_ms))
-            return
-        chunks = []
-        out_items = []
-        oversized = False
-        for item, body in zip(items, bodies):
-            item_id = str(item.get("id", ""))
-            entry = {"id": item_id, "ms": body["ms"],
-                     "stdout": body.get("stdout", ""), "stderr": body.get("stderr", ""),
-                     "stdout_truncated": bool(body.get("stdout_truncated", False)),
-                     "stderr_truncated": bool(body.get("stderr_truncated", False))}
-            if body["status"] == "ok":
-                entry["status"] = "ok"
-                entry["data"] = _ref_or_encode(body["data"], data_store, chunks)
-            else:
-                entry["status"] = "error"
-                entry["error"] = body.get("error") or {
-                    "code": protocol.CATEGORY_TASK_ERROR,
-                    "type": "Error", "message": "unknown", "traceback": ""}
-            out_items.append(entry)
-        head = {"v": protocol.PROTOCOL_VERSION, "type": protocol.MSG_BATCH_RESULT,
-                "id": msg_id, "items": out_items}
-        if _frame_size(json.dumps(head), chunks) > max_result_bytes:
-            await _send_text(ws, send_lock, _task_error_body(
-                msg_id, protocol.CATEGORY_SERIALIZATION_ERROR,
-                "Batch result exceeds max_result_bytes (%d)" % max_result_bytes))
-            return
-        if chunks:
-            await _send_frame(ws, send_lock, protocol.build_binary(
-                json.dumps(head), chunks))
-        else:
-            await _send_text(ws, send_lock, head)
-        return
-
-    # Single task
-    future = loop.run_in_executor(executor_pool, _job_fn, host, message)
+    future = loop.run_in_executor(executor_pool, _job_fn, host, data_store, message)
     try:
-        # shield: siehe Batch-Zweig (Watchdog benoetigt das laufende Future).
-        body = await asyncio.wait_for(asyncio.shield(future), timeout)
+        # shield: wait_for darf das Future NICHT canceln - der Watchdog
+        # muss den weiterlaufenden (nicht killbaren) Thread erkennen.
+        result = await asyncio.wait_for(asyncio.shield(future), timeout)
     except asyncio.TimeoutError:
         _register_stuck(stuck, future, loop, runaway_grace_ms)
         await _send_text(ws, send_lock, _task_error_body(
@@ -318,36 +305,37 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, data_store, message
             "Task timeout after %d ms" % timeout_ms))
         return
 
-    if body["status"] == "ok":
-        chunks = []
-        encoded = _ref_or_encode(body["data"], data_store, chunks)
-        head = protocol.build_response(
-            protocol.MSG_TASK_RESULT, msg_id, "ok", data=encoded, ms=body["ms"])
-        head["stdout"] = body.get("stdout", "")
-        head["stderr"] = body.get("stderr", "")
-        head["stdout_truncated"] = bool(body.get("stdout_truncated", False))
-        head["stderr_truncated"] = bool(body.get("stderr_truncated", False))
-        if _frame_size(json.dumps(head), chunks) > max_result_bytes:
-            await _send_text(ws, send_lock, _task_error_body(
-                msg_id, protocol.CATEGORY_SERIALIZATION_ERROR,
-                "Task result exceeds max_result_bytes (%d)" % max_result_bytes))
-            return
-        if chunks:
-            await _send_frame(ws, send_lock, protocol.build_binary(
-                json.dumps(head), chunks))
-        else:
-            await _send_text(ws, send_lock, head)
+    chunks = result.get("chunks", [])
+    if result.get("batch"):
+        head = {"v": protocol.PROTOCOL_VERSION, "type": protocol.MSG_BATCH_RESULT,
+                "id": msg_id, "items": result["items"]}
     else:
-        head = protocol.build_response(
-            protocol.MSG_TASK_ERROR, msg_id, "error",
-            error=body.get("error") or {
-                "code": protocol.CATEGORY_TASK_ERROR,
-                "type": "Error", "message": "unknown", "traceback": ""},
-            ms=body["ms"])
+        body = result["body"]
+        if body["status"] == "ok":
+            head = protocol.build_response(
+                protocol.MSG_TASK_RESULT, msg_id, "ok",
+                data=body.get("data"), ms=body["ms"])
+        else:
+            head = protocol.build_response(
+                protocol.MSG_TASK_ERROR, msg_id, "error",
+                error=body.get("error") or {
+                    "code": protocol.CATEGORY_TASK_ERROR,
+                    "type": "Error", "message": "unknown", "traceback": ""},
+                ms=body["ms"])
         head["stdout"] = body.get("stdout", "")
         head["stderr"] = body.get("stderr", "")
         head["stdout_truncated"] = bool(body.get("stdout_truncated", False))
         head["stderr_truncated"] = bool(body.get("stderr_truncated", False))
+
+    if _frame_size(json.dumps(head), chunks) > max_result_bytes:
+        await _send_text(ws, send_lock, _task_error_body(
+            msg_id, protocol.CATEGORY_SERIALIZATION_ERROR,
+            "Task result exceeds max_result_bytes (%d)" % max_result_bytes))
+        return
+    if chunks:
+        await _send_frame(ws, send_lock, protocol.build_binary(
+            json.dumps(head), chunks))
+    else:
         await _send_text(ws, send_lock, head)
 
 
@@ -364,6 +352,15 @@ async def _run_data_get(ws, send_lock, loop, executor_pool, data_store, message,
         value, _meta = data_store.get(ref_id)
         if value is None:
             return None, None
+        # Phase 4 (file-backed): auf Wunsch nur den Datei-Descriptor senden -
+        # Godot liest die Rohbytes chunkweise per FileAccess, ohne
+        # WebSocket-Transfer. Fehlt die Datei, Fallback auf normalen Transfer.
+        if message.get("want") == "file":
+            info = data_store.file_info(ref_id)
+            if info is not None:
+                return {"transport": "file", "path": info["path"],
+                        "nbytes": info["size"], "dtype": info["dtype"],
+                        "shape": info["shape"], "sha256": info["sha256"]}, None
         chunks = []
         encoded = _encode_with_chunks(value, chunks)
         return encoded, chunks
@@ -400,6 +397,10 @@ async def _run_data_get(ws, send_lock, loop, executor_pool, data_store, message,
         "status": "ok",
         "data": encoded,
     }
+    # Datei-Modus: Descriptor ohne Chunks - direkt als Text senden.
+    if chunks is None:
+        await _send_text(ws, send_lock, head)
+        return
     if _frame_size(json.dumps(head), chunks) > max_result_bytes:
         await _send_text(ws, send_lock, _error_body(
             protocol.CATEGORY_SERIALIZATION_ERROR,
@@ -449,7 +450,14 @@ async def run(host, port, tmpdir, tag, caps=None):
     """Bind, write port+pid tmp file, serve; exit when shutdown requested or
     after the connection dropped (no zombies). `caps` ist ein optionales
     Dict mit max_stdout_bytes / max_stderr_bytes / max_result_bytes."""
-    state = {"shutdown": False, "connections": 0, "caps": caps or {}}
+    state = {"shutdown": False, "connections": 0, "caps": caps or {},
+             "tmpdir": tmpdir, "tag": tag}
+    # Crash-Cleanup: verwaiste Daten-Dateien dieser Instanz aus frueheren
+    # Prozessen entfernen (Dateien bleiben sonst nach einem Crash liegen).
+    removed = cleanup_orphan_files(os.path.join(tmpdir, "data"), tag)
+    if removed:
+        print("[python_bridge] cleaned up %d orphan data file(s)" % removed,
+              flush=True)
 
     async def _serve():
         server = await websockets.serve(
