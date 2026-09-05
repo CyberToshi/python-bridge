@@ -4,6 +4,11 @@ Dieses Dokument beschreibt die tatsächlich implementierte Architektur
 (Stand: v0.2.0, Protokoll v2). Grundlage war die v0.1.0-Codebasis; alle
 Änderungen sind unten markiert.
 
+Der nächste Architekturplan steht separat in `docs/ARCHITEKTUR_V3.md`. Er ist
+noch kein Implementierungsstand und beschreibt die geplante Entwicklung von
+Script Registry, Data Plane, Handles, Frame-Budgets und optionalen IPC-
+Transporten.
+
 ## Leitprinzipien (verbindlich)
 
 1. **Python bleibt Python.** Die Bridge ist eine Kommunikations- und
