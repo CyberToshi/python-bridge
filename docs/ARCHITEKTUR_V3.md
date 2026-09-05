@@ -1,6 +1,10 @@
 # Python Bridge — Architekturplan der nächsten Generation
 
-**Status:** Konzept- und Umsetzungsplan, keine vollständige Implementierung
+**Status:** teilweise umgesetzt — Phase 0 (Messbarkeit/Quick Wins), Phase 1
+(Code Plane/ScriptRegistry) und Phase 2 (Data Plane, Kern) sind implementiert
+und getestet (Stand der Commits `f625c7b`…`2c5fbc5`). Phase 3–5 bleiben
+Umsetzungsplan; Shared Memory/mmap (Abschnitt 6) ist bewusst noch nicht
+gebaut. Die Implementierungsentscheidungen sind unten pro Phase markiert.
 
 **Ausgangspunkt:** aktuelle Python Bridge v0.2.x, Protokoll v2
 
@@ -1194,33 +1198,32 @@ WebSockets bleiben für Control und mittelgroße Daten ausreichend. Ein zweiter 
 
 ## Phase 0 — Messbarkeit und Quick Wins
 
-**Priorität:** notwendig
+**Priorität:** notwendig — **umgesetzt (Commit `64a9cd9`)**
 
-1. Benchmark-Harness für:
-   - JSON vs Binary;
-   - PackedFloat32Array;
-   - NumPy ndarray;
-   - verschiedene Größen;
-   - Dekodierzeit pro Frame;
-   - Source-Transfer und Compile-Zeit.
-2. `build_binary` ohne quadratische Bytes-Konkatenation.
-3. `queue_timeout_ms` und `execution_timeout_ms` trennen.
-4. Ergebnis-, stdout- und stderr-Limits.
-5. NumPy-Erkennung lazy cachen.
-6. Telemetrie für Payload-Größe, Encode-, Send-, Decode- und Materialisierungszeit.
+1. ✅ Benchmark-Harness (`tools/benchmark.py`) für JSON vs Binary,
+   PackedFloat32Array, NumPy ndarray, Source-Transfer und Compile-Zeit.
+2. ✅ `build_binary` ohne quadratische Bytes-Konkatenation (bytearray).
+3. ✅ `queue_timeout_ms` und Execution-Timeout getrennt (ab RUNNING).
+4. ✅ Ergebnis-, stdout- und stderr-Limits.
+5. ✅ NumPy-Erkennung lazy gecacht.
+6. ⚠️ Telemetrie: Payload-/Drain-Zaehler vorhanden (`last_drain_bytes`),
+   feingranulare Encode-/Decode-Timings bleiben Ausbaustufe.
 
 **Akzeptanzkriterien:** Bestehende Tests bleiben grün; Benchmarks liefern reproduzierbare Werte; keine API-Breaks für Standardaufrufe.
 
 ## Phase 1 — Code Plane
 
-**Priorität:** notwendig
+**Priorität:** notwendig — **umgesetzt (Commit `f4e4e13`)**
 
-1. `ScriptRegistry` auf Godot-Seite.
-2. `DEFINE_SCRIPT`/`DEFINE_ACK` und `CALL` per Runtime-ID.
-3. Python Compile Cache.
-4. mtime-/size-basierter Source-Read-Cache.
-5. Context-Affinität und sticky Routing.
-6. Rückwärtskompatibler Fallback für ältere Task-Nachrichten mit Source.
+1. ✅ `ScriptRegistry` auf Godot-Seite (Read-Cache + Instanz-Kontext-Registry).
+2. ✅ DEFINE-once: unveränderte Quellen werden nach Bestätigung nur noch per
+   `source_hash` referenziert (MSG_DEFINE/_ACK als eigene Nachricht sind
+   bewusst nicht noetig: define-on-call mit Hash genuegt).
+3. ✅ Python Compile Cache.
+4. ✅ mtime-/size-basierter Source-Read-Cache.
+5. ⚠️ Context-Affinität / sticky Routing — ausstehend (Phase 3); Godot-
+   Registry verhindert bereits fehlerhafte Re-Definitionen nach Neustarts.
+6. ✅ Rückwärtskompatibler Fallback für Nachrichten mit Source.
 
 **Akzeptanzkriterien:** Unveränderter 1-MB-Source wird nach Initialisierung nicht erneut über WebSocket übertragen; Änderung erzeugt genau eine neue Definition; Prozess-Restart baut Context korrekt wieder auf.
 
@@ -1228,13 +1231,27 @@ WebSockets bleiben für Control und mittelgroße Daten ausreichend. Ein zweiter 
 
 **Priorität:** notwendig für wissenschaftliche Daten
 
-1. Numerische Packed-Arrays über Binary Chunks.
-2. Dtype-/Shape-/nbytes-Validierung.
-3. Raw Frame Queue.
-4. Byte- und Zeitbudgets pro Frame.
-5. progressive Materialisierung.
-6. Handle-/DataRef-Grundmodell.
-7. Progress-Events und Release/GC.
+**Status: Kern umgesetzt (Commits `f625c7b`, `c2e7d33`, `e32c21f`, `2c5fbc5`).**
+
+1. ✅ Numerische Packed-Arrays über Binary Chunks — grosse
+   `PackedFloat32Array`/`Float64`/`Int32`/`Int64` wandern als Little-Endian-
+   Chunks (descriptor `nbytes`+`chunk`), kleine bleiben JSON-Listen.
+2. ✅ Dtype-/Shape-/nbytes-Validierung — beide Decoder prüfen deklarierte
+   `nbytes` gegen die Chunk-Größe vor der Materialisierung (fehlerhafte
+   Deskriptoren ergeben leere Typed Arrays bzw. raw-fallback, keine
+   stille Garbage).
+3. ✅ Raw Frame Queue — `BridgeConnectionManager` puffert rohe Pakete.
+4. ✅ Byte-Budget pro Frame — `max_decode_bytes_per_frame` (Default 16 MiB)
+   verteilt grosse Antworten über mehrere Frames (kein Main-Thread-Stall).
+5. ⚠️ Progressive/gestreamte Materialisierung — teilweise: DataRef-
+   Materialisierung lädt als ein Binary-Frame (atomar), Chunk-Streaming
+   bleibt Ausbaustufe.
+6. ✅ Handle-/DataRef-Grundmodell — `PythonBridgeDataRef`,
+   `materialize_data`/`release_data`/`describe_data`, Auto-Schwelle
+   `data_ref_threshold_bytes` (Default 16 MiB), stale-Markierung über den
+   Instanz-Lifecycle, Python-`DataStore` mit Connection-Cleanup.
+7. ⚠️ Progress-Events / GC — explizites Release + Instanz-/Verbindungsende
+   räumen auf; Progress-Events pro Stream sind noch nicht gebaut.
 
 **Akzeptanzkriterien:** Große Float32-Daten laufen nicht als JSON-Zahlenliste; ein definierter Benchmark-Datensatz erzeugt keinen unbeschränkten Frame-Stall; Handles können mehrfach genutzt und explizit freigegeben werden.
 

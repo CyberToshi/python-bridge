@@ -19,6 +19,30 @@
   Dekodierung ohne Byte-Budget, numerische Arrays per JSON, eigenständiges
   Kapitel mit A/B/C/D-Kategorien, Größenordnungen und Dateinamen.
 
+### Phase 2 — Data Plane (Commits `f625c7b` … `2c5fbc5`)
+
+- **Binärer Numerik-Transport**: grosse Godot-`Packed*Array`
+  (f32/f64/i32/i64) wandern als Little-Endian-Binary-Chunks mit
+  `nbytes`-Descriptor statt als JSON-Zahlenliste; kleine bleiben inline.
+  Python dekodiert Chunks (mit NumPy als ndarray) und versteht die Legacy-
+  Listenform.
+- **Dtype-/nbytes-Validierung** auf beiden Decodern: Descriptor-Mismatch
+  wird erkannt (leeres Typed Array / raw-Fallback statt stiller Garbage).
+- **DataRef-Handles**: numpy-Ergebnisse >= `data_ref_threshold_bytes`
+  (Default 16 MiB) bleiben im Python-Prozess (per-Connection-`DataStore`,
+  Cleanup bei Verbindungsende); Godot erhält `PythonBridgeDataRef` mit
+  `materialize_data`/`release_data`/`describe_data`. Protokoll:
+  `data_get`/`data_result`/`data_release`/`data_ack`. Stale-Handles
+  (Release/Instanz-Ende) liefern strukturierte Fehler.
+- **Frame-Budget**: `max_decode_bytes_per_frame` (Default 16 MiB) — rohe
+  Pakete werden gepuffert und nur bis zum Budget pro Frame dekodiert
+  (kein Main-Thread-Stall durch grosse Antworten).
+- **Neue Doku** `docs/DATA_PLANE.md`; `docs/ARCHITEKTUR_V3.md`-Status auf
+  „Phasen 0–2 umgesetzt“ aktualisiert.
+
+**Tests:** GDScript-Suite 52 Tests / 167 Assertions, Python-Suite 61 Tests
+(inkl. DataStore-Unit- und DataRef-Server-Integrationstests).
+
 ## v0.2.1 (current)
 
 ### Neu: Demo-Szene & Dokumentations-PDF

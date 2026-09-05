@@ -271,7 +271,8 @@ Die Schritte 1–3 im Detail (mit Editor-Menus und Dock-Anatomie):
 `docs/HANDS_ON_CONNECT_GUIDE.md`.
 
 Mehr Details zu jedem Baustein: `docs/API.md`, `docs/ARCHITEKTUR.md`,
-`docs/ARCHITEKTUR_V3.md` (Plan für Script Registry, Data Plane, Handles und
-Shared-Memory-Ausbaustufen), `docs/BOTTLENECKS.md`,
+`docs/ARCHITEKTUR_V3.md` (Plan; Phasen 0–2 inkl. ScriptRegistry und
+Data-Plane-Kern sind implementiert), `docs/DATA_PLANE.md` (grosse Daten,
+DataRef-Handles, Frame-Budget), `docs/BOTTLENECKS.md`,
 `docs/PythonBridge_Dokumentation.pdf` und die lauffähige Demo-Szene
 `example/demo_scene.tscn`.
