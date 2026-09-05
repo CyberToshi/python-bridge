@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--max-stdout-bytes", type=int, default=0)
     ap.add_argument("--max-stderr-bytes", type=int, default=0)
     ap.add_argument("--max-result-bytes", type=int, default=0)
+    ap.add_argument("--data-ref-threshold-bytes", type=int, default=0)
     args = ap.parse_args()
     caps = {}
     if args.max_stdout_bytes > 0:
@@ -30,6 +31,8 @@ def main():
         caps["max_stderr_bytes"] = args.max_stderr_bytes
     if args.max_result_bytes > 0:
         caps["max_result_bytes"] = args.max_result_bytes
+    if args.data_ref_threshold_bytes > 0:
+        caps["data_ref_threshold_bytes"] = args.data_ref_threshold_bytes
     asyncio.run(server.run(args.bind, args.port, args.tmpdir, args.tag, caps))
 
 

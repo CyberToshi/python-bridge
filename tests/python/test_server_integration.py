@@ -22,11 +22,11 @@ sys.path.insert(0, PY_DIR)
 from python_bridge import protocol  # noqa: E402
 
 
-def _start_server(tmpdir, tag="test"):
+def _start_server(tmpdir, tag="test", extra=()):
     proc = subprocess.Popen(
         [sys.executable, os.path.join(PY_DIR, "run_server.py"),
          "--bind", "127.0.0.1", "--port", "0",
-         "--tmpdir", tmpdir, "--tag", tag],
+         "--tmpdir", tmpdir, "--tag", tag] + list(extra),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     tmp_file = os.path.join(tmpdir, "%s.json" % tag)
     for _ in range(200):
@@ -250,6 +250,140 @@ class ServerIntegrationTest(unittest.TestCase):
                 self.assertEqual(msg["error"]["code"], protocol.CATEGORY_TIMEOUT_ERROR)
         import asyncio
         asyncio.run(run())
+
+    def _start_with_threshold(self, threshold):
+        return _start_server(
+            self._tmpdir, tag="ref",
+            extra=["--data-ref-threshold-bytes", str(threshold)])
+
+    async def _recv_head(self, ws):
+        """Raw message header (no value decoding). Descriptor-only frames are
+        text; anything chunked falls back to protocol.parse."""
+        raw = await ws.recv()
+        if isinstance(raw, str):
+            import json
+            return json.loads(raw)
+        msg, _data = protocol.parse(raw)
+        return msg
+
+    def test_data_ref_large_ndarray_lifecycle(self):
+        """Auto-DataRef oberhalb der Schwelle: Descriptor statt Chunk, mehrfache
+        Materialisierung, explizite Freigabe, stale-Handle nach Release."""
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover
+            self.skipTest("numpy not available")
+
+        # Separate server with its own threshold config.
+        import shutil
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="pb_ref_")
+        proc, info = self._start_with_threshold(32)
+        port = info["port"]
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src = (
+                    "import numpy as np\n"
+                    "result = np.arange(64, dtype=np.float32)\n"
+                )
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "d1",
+                    "command": "run", "context": "refctx",
+                    "source": src, "data": {"input": None}}))
+                msg = await self._recv_head(ws)
+                self.assertEqual(msg["type"], protocol.MSG_TASK_RESULT)
+                self.assertEqual(msg["status"], "ok")
+                # The result is a lightweight handle, not a giant chunk.
+                desc = msg["data"]
+                self.assertEqual(desc.get("$pb"), "data_ref")
+                self.assertEqual(desc["dtype"], "float32")
+                self.assertEqual(desc["shape"], [64])
+                self.assertEqual(desc["nbytes"], 256)
+                ref_id = desc["id"]
+
+                # Reusable: materialize twice with identical content.
+                for n in (1, 2):
+                    await ws.send(protocol.build_text({
+                        "v": 2, "type": protocol.MSG_DATA_GET,
+                        "id": "g%d" % n, "ref_id": ref_id}))
+                    msg, data = await self._recv(ws)
+                    self.assertEqual(msg["type"], protocol.MSG_DATA_RESULT)
+                    self.assertEqual(msg["status"], "ok")
+                    self.assertTrue(np.array_equal(
+                        data, np.arange(64, dtype=np.float32)))
+
+                # Explicit release frees the backing store.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_DATA_RELEASE,
+                    "id": "r1", "ref_id": ref_id}))
+                msg, _ = await self._recv(ws)
+                self.assertEqual(msg["type"], protocol.MSG_DATA_ACK)
+                self.assertEqual(msg["freed"], True)
+
+                # Materializing a released handle is a structured error.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_DATA_GET,
+                    "id": "g3", "ref_id": ref_id}))
+                msg, _ = await self._recv(ws)
+                self.assertEqual(msg["type"], protocol.MSG_DATA_RESULT)
+                self.assertEqual(msg["status"], "error")
+                self.assertIn("stale", msg["error"]["message"])
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_small_ndarray_stays_direct(self):
+        """Unterhalb der Schwelle bleibt das numpy-Ergebnis ein normaler,
+        direkt uebertragener Wert (kein Handle)."""
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover
+            self.skipTest("numpy not available")
+        tmp_proc, info = self._start_with_threshold(1024)
+        port = info["port"]
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src = (
+                    "import numpy as np\n"
+                    "result = np.arange(8, dtype=np.float32)\n"  # 32 bytes
+                )
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "d2",
+                    "command": "run", "context": "refctx2",
+                    "source": src, "data": {"input": None}}))
+                msg, data = await self._recv(ws)
+                self.assertEqual(msg["type"], protocol.MSG_TASK_RESULT)
+                self.assertEqual(msg["status"], "ok")
+                self.assertFalse(isinstance(data, dict) and
+                                 data.get("$pb") == "data_ref")
+                self.assertTrue(np.array_equal(
+                    data, np.arange(8, dtype=np.float32)))
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            try:
+                tmp_proc.kill()
+                tmp_proc.wait(timeout=5)
+            except Exception:
+                pass
 
     def test_shutdown_ack(self):
         async def run():
