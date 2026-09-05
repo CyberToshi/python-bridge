@@ -94,7 +94,10 @@ func _dispatch(now_ms: int) -> void:
 			return
 		_warned_inbox = false
 
-		var unit: Dictionary = _task_manager.next_unit(instance_id, now_ms)
+		# Phase 3: Contexts, die gerade in einem Worker dieser Instanz laufen,
+		# sind busy - gleiche Contexts werden nicht parallel dispatched.
+		var busy: Array = _task_manager.running_contexts(instance_id)
+		var unit: Dictionary = _task_manager.next_unit(instance_id, now_ms, busy)
 		if unit.get("kind") == "wait" or unit.get("kind") == "none":
 			continue
 		_task_manager.mark_unit_running(instance_id, unit, now_ms)

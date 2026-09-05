@@ -178,6 +178,88 @@ func test_non_batchable_task_dispatches_immediately() -> void:
 	var unit := tm.next_unit("inst", now)
 	assert_eq(unit["kind"], "single")
 
+func test_running_contexts_reports_unique() -> void:
+	var tm := PythonBridgeTaskManager.new(_cfg())
+	var t1 := PythonBridgeTask.make_call("c1", "ctxA", "s", "f", [], {}, 1000)
+	var t2 := PythonBridgeTask.make_call("c2", "ctxA", "s", "f", [], {}, 1000)
+	var t3 := PythonBridgeTask.make_call("c3", "ctxB", "s", "f", [], {}, 1000)
+	# Non-batchable: jeder Dispatch ist deterministisch eine Einzel-Unit.
+	t1.batchable = false
+	t2.batchable = false
+	t3.batchable = false
+	tm.submit(t1, 0)
+	tm.submit(t2, 0)
+	tm.submit(t3, 0)
+	var u1 := tm.next_unit("inst", 0)
+	tm.mark_unit_running("inst", u1, 0)
+	# t2 (ctxA) + t3 (ctxB) are queued; only t1 is running -> busy = [ctxA].
+	assert_eq(tm.running_contexts("inst"), ["ctxA"])
+	assert_eq(tm.running_contexts("other"), [], "no state on other instances")
+
+func test_busy_context_skipped_for_parallel_dispatch() -> void:
+	var tm := PythonBridgeTaskManager.new(_cfg())
+	# Running task occupies ctxA on "inst".
+	var t1 := PythonBridgeTask.make_call("p1", "ctxA", "s", "f", [], {}, 1000)
+	t1.batchable = false
+	tm.submit(t1, 0)
+	var u1 := tm.next_unit("inst", 0)
+	tm.mark_unit_running("inst", u1, 0)
+	# New tasks: another ctxA task (queued first) and an independent ctxB.
+	var p2 := PythonBridgeTask.make_call("p2", "ctxA", "s", "f", [], {}, 1000)
+	var p3 := PythonBridgeTask.make_call("p3", "ctxB", "s", "f", [], {}, 1000)
+	p2.batchable = false
+	p3.batchable = false
+	tm.submit(p2, 0)
+	tm.submit(p3, 0)
+	# While ctxA is busy, the dispatcher must pick ctxB (other slot), not p2.
+	var busy := tm.running_contexts("inst")
+	assert_eq(busy, ["ctxA"])
+	var u2 := tm.next_unit("inst", 0, busy)
+	assert_eq(u2["kind"], "single")
+	assert_eq((u2["task"] as PythonBridgeTask).id, "p3",
+		"busy ctxA task is skipped in favour of free ctxB")
+	# ctxB now running as well: both busy -> nothing dispatchable.
+	tm.mark_unit_running("inst", u2, 0)
+	var busy2 := tm.running_contexts("inst")
+	assert_eq(busy2, ["ctxA", "ctxB"])
+	var u3 := tm.next_unit("inst", 0, busy2)
+	assert_eq(u3["kind"], "none")
+	# After ctxA finishes, its queued task becomes dispatchable again.
+	tm.resolve_result("inst", {
+		"msg": {"type": PythonProtocol.MSG_TASK_RESULT, "id": "p1", "status": "ok",
+			"data": 1},
+	})
+	var busy3 := tm.running_contexts("inst")
+	var u4 := tm.next_unit("inst", 0, busy3)
+	assert_eq((u4["task"] as PythonBridgeTask).id, "p2",
+		"freed context dispatches its queued task")
+
+func test_busy_context_defers_batch_window_flush() -> void:
+	var cfg := _cfg()
+	var tm := PythonBridgeTaskManager.new(cfg)
+	# A running task occupies ctxA.
+	var t1 := PythonBridgeTask.make_call("w1", "ctxA", "s", "f", [], {}, 1000)
+	tm.submit(t1, 0)
+	var u1 := tm.next_unit("inst", 0)
+	tm.mark_unit_running("inst", u1, 0)
+	# Two batchable ctxA tasks arrive -> a batch window opens for them.
+	tm.submit(PythonBridgeTask.make_call("w2", "ctxA", "s", "f", [], {}, 1000), 0)
+	tm.submit(PythonBridgeTask.make_call("w3", "ctxA", "s", "f", [], {}, 1000), 0)
+	var u2 := tm.next_unit("inst", 0)
+	assert_eq(u2["kind"], "wait", "two same-context tasks open a window")
+	# Window expired, but ctxA still busy: flush must be deferred.
+	var busy := tm.running_contexts("inst")
+	var u3 := tm.next_unit("inst", 1000, busy)
+	assert_eq(u3["kind"], "wait", "busy context defers the window flush")
+	# ctxA freed -> flush proceeds with both tasks.
+	tm.resolve_result("inst", {
+		"msg": {"type": PythonProtocol.MSG_TASK_RESULT, "id": "w1", "status": "ok",
+			"data": 1},
+	})
+	var u4 := tm.next_unit("inst", 1000, tm.running_contexts("inst"))
+	assert_eq(u4["kind"], "batch")
+	assert_eq((u4["tasks"] as Array).size(), 2)
+
 func test_explicit_instance_targeting() -> void:
 	var tm := PythonBridgeTaskManager.new(_cfg())
 	var t := PythonBridgeTask.make_call("x1", "ctx", "s", "f", [], {}, 1000)

@@ -30,7 +30,18 @@ static func defaults() -> Dictionary:
 		"dependencies": PackedStringArray(),
 		# --- Task manager / backpressure ----------------------------------------
 		"max_queued_tasks": 1000,
+		# Anzahl gleichzeitig offener Units pro Instanz. Fuer Parallelitaet auf
+		# mehreren Worker-Slots zusammen mit workers_per_instance erhoehen
+		# (z. B. beide 4). Gleiche Contexts bleiben serialisiert (Scheduler).
 		"max_inflight_per_instance": 1,
+		# Worker-Threads pro Python-Prozess. Tasks verschiedener Contexts
+		# koennen parallel laufen; gleiche Contexts strikt seriell. Reine
+		# CPU-Python-Last skaliert wegen des GIL nur ueber mehrere Prozesse.
+		"workers_per_instance": 1,
+		# Watchdog: laeuft ein per Timeout abgebrochener Job nach dieser Frist
+		# weiter (Thread nicht killbar), beendet sich der Prozess selbst und
+		# wird ueber die Restart-Policy neu gestartet. 0 = deaktiviert.
+		"runaway_grace_ms": 10000,
 		"max_payload_bytes": 64 * 1024 * 1024,
 		"task_timeout_ms": 30000,        # execution timeout (RUNNING)
 		"queue_timeout_ms": 60000,       # max wait for a worker slot (QUEUED); 0 = unlimited

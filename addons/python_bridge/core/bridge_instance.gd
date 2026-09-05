@@ -112,6 +112,11 @@ func _launch() -> void:
 	# Data-Plane: Schwelle fuer automatische DataRef-Handles grosser Ergebnisse.
 	cmd.append("--data-ref-threshold-bytes")
 	cmd.append(str(int(_settings.get("data_ref_threshold_bytes", 16 * 1024 * 1024))))
+	# Phase 3: Worker-Slots und Watchdog-Grace-Frist (Kill-on-Runaway).
+	cmd.append("--workers")
+	cmd.append(str(int(_settings.get("workers_per_instance", 1))))
+	cmd.append("--runaway-grace-ms")
+	cmd.append(str(int(_settings.get("runaway_grace_ms", 10000))))
 	_process = BridgeProcessManager.new()
 	if not _process.start(cmd):
 		_last_error = "Process launch failed."

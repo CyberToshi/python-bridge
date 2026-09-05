@@ -94,6 +94,19 @@ func running_count() -> int:
 			count += 1
 	return count
 
+## Context-Ids, die auf `instance_id` gerade RUNNING sind (eindeutig). Der
+## Scheduler nutzt sie als busy-Set: gleiche Contexts werden nicht doppelt
+## dispatched, unabhaengige Contexts koennen auf freien Worker-Slots laufen.
+func running_contexts(instance_id: String) -> Array:
+	var out: Array = []
+	for t in _by_id.values():
+		var task := t as PythonBridgeTask
+		if task.state == PythonBridgeTask.State.RUNNING \
+				and task.instance_id == instance_id and task.context_id != "" \
+				and not out.has(task.context_id):
+			out.append(task.context_id)
+	return out
+
 # ------------------------------------------------------------------ Cancel
 ## Cancels a task. Returns true when the task existed and was not terminal.
 ## Queued tasks (including window members) become CANCELLED immediately;
@@ -121,20 +134,28 @@ func cancel(task_id: String) -> bool:
 ## Respects retry delays (_next_attempt_ms in the future keeps the task
 ## queued). Tasks match the instance when their instance_id equals it or is
 ## empty (auto).
-func next_unit(instance_id: String, now_ms: int) -> Dictionary:
+##
+## `busy_contexts` (Phase 3): Context-Ids, die auf dieser Instanz gerade in
+## einem anderen Worker laufen. Tasks solcher Contexts werden uebersprungen
+## (weder einzeln noch als Batch-Fenster geflusht), bis der Context frei ist
+## - gleiche Contexts bleiben strikt serialisiert, unabhaengige Contexts
+## koennen auf freien Slots laufen.
+func next_unit(instance_id: String, now_ms: int, busy_contexts: Array = []) -> Dictionary:
 	# 1) Open window: flush on preemption, size or delay; otherwise wait.
 	if _batch_windows.has(instance_id):
 		var window: Dictionary = _batch_windows[instance_id]
 		var front := _peek_front_for(instance_id)
 		if front != null and front.priority < int(window["priority"]):
 			return _flush_window(instance_id)
+		if _tasks_overlap_busy(window.get("tasks", []), busy_contexts):
+			return {"kind": "wait"} # Context besetzt: Flush verschieben
 		if (window["tasks"] as Array).size() >= int(_cfg.get("max_batch_size", 32)) \
 				or now_ms - int(window["start_ms"]) >= int(_cfg.get("max_batch_delay_ms", 32)):
 			return _flush_window(instance_id)
 		return {"kind": "wait"}
 
 	# 2) No window: collect compatible batchable candidates at the queue front.
-	var candidates := _peek_batch_candidates(instance_id)
+	var candidates := _peek_batch_candidates(instance_id, busy_contexts)
 	var max_size := int(_cfg.get("max_batch_size", 32))
 	if candidates.size() >= 2:
 		if candidates.size() >= max_size:
@@ -152,11 +173,19 @@ func next_unit(instance_id: String, now_ms: int) -> Dictionary:
 			_queue.erase(t)
 		return {"kind": "wait"}
 
-	# 3) A single task dispatches immediately (never waits for a batch).
-	var task := _pop_front_for(instance_id)
+	# 3) A single task dispatches immediately (never waits for a batch),
+	#    sofern sein Context nicht gerade auf der Instanz laeuft.
+	var task := _pop_front_for(instance_id, busy_contexts)
 	if task == null:
 		return {"kind": "none"}
 	return {"kind": "single", "task": task, "msg": _build_task_msg(task, instance_id)}
+
+func _tasks_overlap_busy(tasks: Array, busy_contexts: Array) -> bool:
+	for t in tasks:
+		var task := t as PythonBridgeTask
+		if task != null and task.context_id != "" and busy_contexts.has(task.context_id):
+			return true
+	return false
 
 ## Called by the scheduler once per frame: lets queued compatible tasks join
 ## open batch windows (up to max_batch_size). Flushing is decided in
@@ -346,7 +375,7 @@ func mark_unit_running(instance_id: String, unit: Dictionary, started_ms := -1) 
 			task2.started_at_ms = started_ms if started_ms >= 0 else task2.created_at_ms
 
 # ------------------------------------------------------------------ Batching
-func _peek_batch_candidates(instance_id: String) -> Array:
+func _peek_batch_candidates(instance_id: String, busy_contexts: Array = []) -> Array:
 	var candidates: Array = []
 	for t in _queue:
 		var task := t as PythonBridgeTask
@@ -354,6 +383,8 @@ func _peek_batch_candidates(instance_id: String) -> Array:
 			continue
 		if not task.batchable or task._next_attempt_ms > 0:
 			break # non-batchable or delayed task blocks the front
+		if task.context_id != "" and busy_contexts.has(task.context_id):
+			continue # laufender Context: weder einzeln noch batchbar waehlen
 		if candidates.is_empty():
 			candidates.append(task)
 		elif task.priority == (candidates[0] as PythonBridgeTask).priority:
@@ -444,12 +475,14 @@ func _finish(task: PythonBridgeTask, result: PythonBridgeResult) -> void:
 func _targets(task: PythonBridgeTask, instance_id: String) -> bool:
 	return task.instance_id == "" or task.instance_id == instance_id
 
-func _pop_front_for(instance_id: String) -> PythonBridgeTask:
+func _pop_front_for(instance_id: String, busy_contexts: Array = []) -> PythonBridgeTask:
 	for i in _queue.size():
 		var task: PythonBridgeTask = _queue[i]
 		if task._next_attempt_ms > 0:
 			continue
 		if task.instance_id == instance_id or task.instance_id == "":
+			if task.context_id != "" and busy_contexts.has(task.context_id):
+				continue # Context laeuft gerade in einem anderen Worker
 			_queue.remove_at(i)
 			return task
 	return null
