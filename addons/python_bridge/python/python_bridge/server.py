@@ -27,6 +27,18 @@ from .serializer import encode_obj
 
 VERSION = "0.2.0"
 
+# Resultat-Groessenlimit (Bytes). Godot uebergibt den konfigurierten Wert
+# beim Prozessstart; dieser Default gilt fuer Standalone-Betrieb/Tests.
+DEFAULT_MAX_RESULT_BYTES = 256 * 1024 * 1024
+
+
+def _frame_size(head_json, chunks):
+    """Gesamtgroesse einer zu sendenden Nachricht in Bytes."""
+    total = 4 + len(head_json.encode("utf-8"))
+    for chunk in chunks:
+        total += 4 + len(chunk)
+    return total
+
 
 async def _send_text(ws, lock, message):
     async with lock:
@@ -52,7 +64,11 @@ def _encode_with_chunks(value, chunks):
 
 async def _handle_connection(ws, state):
     """Reader task: control messages inline, task/batch enqueued."""
-    host = executor.ScriptHost()
+    caps = state.get("caps") or {}
+    host = executor.ScriptHost(
+        max_stdout_bytes=caps.get("max_stdout_bytes", executor.DEFAULT_MAX_STDOUT_BYTES),
+        max_stderr_bytes=caps.get("max_stderr_bytes", executor.DEFAULT_MAX_STDERR_BYTES))
+    max_result_bytes = int(caps.get("max_result_bytes", DEFAULT_MAX_RESULT_BYTES))
     executor_pool = ThreadPoolExecutor(max_workers=1)
     job_queue = asyncio.Queue()
     send_lock = asyncio.Lock()
@@ -66,7 +82,8 @@ async def _handle_connection(ws, state):
                 message = await job_queue.get()
                 if state["shutdown"]:
                     return
-                await _run_job(ws, send_lock, loop, executor_pool, host, message)
+                await _run_job(ws, send_lock, loop, executor_pool, host, message,
+                               max_result_bytes)
 
         worker_task = asyncio.create_task(_worker())
 
@@ -146,7 +163,7 @@ async def _handle_connection(ws, state):
         state["connections"] -= 1
 
 
-async def _run_job(ws, send_lock, loop, executor_pool, host, message):
+async def _run_job(ws, send_lock, loop, executor_pool, host, message, max_result_bytes):
     """Runs one task or batch message in the worker thread and responds."""
     msg_id = str(message.get("id", ""))
     timeout_ms = int(message.get("timeout_ms", 0) or 0)
@@ -167,10 +184,13 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, message):
             return
         chunks = []
         out_items = []
+        oversized = False
         for item, body in zip(items, bodies):
             item_id = str(item.get("id", ""))
             entry = {"id": item_id, "ms": body["ms"],
-                     "stdout": body.get("stdout", ""), "stderr": body.get("stderr", "")}
+                     "stdout": body.get("stdout", ""), "stderr": body.get("stderr", ""),
+                     "stdout_truncated": bool(body.get("stdout_truncated", False)),
+                     "stderr_truncated": bool(body.get("stderr_truncated", False))}
             if body["status"] == "ok":
                 entry["status"] = "ok"
                 entry["data"] = _encode_with_chunks(body["data"], chunks)
@@ -182,6 +202,11 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, message):
             out_items.append(entry)
         head = {"v": protocol.PROTOCOL_VERSION, "type": protocol.MSG_BATCH_RESULT,
                 "id": msg_id, "items": out_items}
+        if _frame_size(json.dumps(head), chunks) > max_result_bytes:
+            await _send_text(ws, send_lock, _task_error_body(
+                msg_id, protocol.CATEGORY_SERIALIZATION_ERROR,
+                "Batch result exceeds max_result_bytes (%d)" % max_result_bytes))
+            return
         if chunks:
             await _send_frame(ws, send_lock, protocol.build_binary(
                 json.dumps(head), chunks))
@@ -207,6 +232,13 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, message):
             protocol.MSG_TASK_RESULT, msg_id, "ok", data=encoded, ms=body["ms"])
         head["stdout"] = body.get("stdout", "")
         head["stderr"] = body.get("stderr", "")
+        head["stdout_truncated"] = bool(body.get("stdout_truncated", False))
+        head["stderr_truncated"] = bool(body.get("stderr_truncated", False))
+        if _frame_size(json.dumps(head), chunks) > max_result_bytes:
+            await _send_text(ws, send_lock, _task_error_body(
+                msg_id, protocol.CATEGORY_SERIALIZATION_ERROR,
+                "Task result exceeds max_result_bytes (%d)" % max_result_bytes))
+            return
         if chunks:
             await _send_frame(ws, send_lock, protocol.build_binary(
                 json.dumps(head), chunks))
@@ -221,6 +253,8 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, message):
             ms=body["ms"])
         head["stdout"] = body.get("stdout", "")
         head["stderr"] = body.get("stderr", "")
+        head["stdout_truncated"] = bool(body.get("stdout_truncated", False))
+        head["stderr_truncated"] = bool(body.get("stderr_truncated", False))
         await _send_text(ws, send_lock, head)
 
 
@@ -257,10 +291,11 @@ async def _handle_introspect(ws, send_lock, message, msg_id):
         })
 
 
-async def run(host, port, tmpdir, tag):
+async def run(host, port, tmpdir, tag, caps=None):
     """Bind, write port+pid tmp file, serve; exit when shutdown requested or
-    after the connection dropped (no zombies)."""
-    state = {"shutdown": False, "connections": 0}
+    after the connection dropped (no zombies). `caps` ist ein optionales
+    Dict mit max_stdout_bytes / max_stderr_bytes / max_result_bytes."""
+    state = {"shutdown": False, "connections": 0, "caps": caps or {}}
 
     async def _serve():
         server = await websockets.serve(

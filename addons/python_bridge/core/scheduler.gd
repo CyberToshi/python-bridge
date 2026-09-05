@@ -97,7 +97,7 @@ func _dispatch(now_ms: int) -> void:
 		var unit: Dictionary = _task_manager.next_unit(instance_id, now_ms)
 		if unit.get("kind") == "wait" or unit.get("kind") == "none":
 			continue
-		_task_manager.mark_unit_running(instance_id, unit)
+		_task_manager.mark_unit_running(instance_id, unit, now_ms)
 		var err: Error = _send_message.call(instance, unit["msg"])
 		if err != OK:
 			var fail_err := PythonBridgeErrorHandler.make(

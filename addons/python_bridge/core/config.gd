@@ -32,7 +32,11 @@ static func defaults() -> Dictionary:
 		"max_queued_tasks": 1000,
 		"max_inflight_per_instance": 1,
 		"max_payload_bytes": 64 * 1024 * 1024,
-		"task_timeout_ms": 30000,
+		"task_timeout_ms": 30000,        # execution timeout (RUNNING)
+		"queue_timeout_ms": 60000,       # max wait for a worker slot (QUEUED); 0 = unlimited
+		"max_stdout_bytes": 1024 * 1024,
+		"max_stderr_bytes": 1024 * 1024,
+		"max_result_bytes": 256 * 1024 * 1024,
 		"max_retries": 0,
 		"retry_policy": "connection_error", # none | connection_error | process_error | all
 		"retry_delay_ms": 250,

@@ -11,6 +11,24 @@ from collections.abc import Mapping, Sequence
 TAG = "$pb"
 INLINE_LIMIT = 512
 
+# NumPy ist optional und wird genau einmal pro Prozess geprüft (lazy,
+# gecacht). Vorher wurde der Import pro Wert ausgelöst - bei großen,
+# elementweise serialisierten Datenstrukturen ein messbarer Overhead.
+_NUMPY = None
+_NUMPY_CHECKED = False
+
+
+def _try_numpy():
+    global _NUMPY, _NUMPY_CHECKED
+    if not _NUMPY_CHECKED:
+        _NUMPY_CHECKED = True
+        try:
+            import numpy as _numpy_impl
+            _NUMPY = _numpy_impl
+        except Exception:  # pragma: no cover - numpy fehlt
+            _NUMPY = None
+    return _NUMPY
+
 
 def _blob(blob: bytes, chunks: list) -> dict:
     if len(blob) <= INLINE_LIMIT:
@@ -32,7 +50,7 @@ def encode_obj(value, chunks: list):
     if isinstance(value, str):
         return value
 
-    # NumPy ist optional.
+    # NumPy ist optional (Import-Ergebnis wird gecacht, siehe _try_numpy).
     np = _try_numpy()
     if np is not None:
         if isinstance(value, np.ndarray):
@@ -123,11 +141,3 @@ def decode_ndarray(v: dict, chunks: list):
         except Exception:
             pass
     return raw
-
-
-def _try_numpy():
-    try:
-        import numpy as _np
-        return _np
-    except Exception:
-        return None

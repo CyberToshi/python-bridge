@@ -26,6 +26,49 @@ from . import protocol
 
 SYNTAX_FILENAME_PREFIX = "<bridge:"
 
+# Default output caps (bytes). Godot uebergibt die konfigurierten Werte beim
+# Prozessstart (siehe bridge_instance.gd); diese Defaults gelten fuer den
+# Standalone-Betrieb und die Tests.
+DEFAULT_MAX_STDOUT_BYTES = 1024 * 1024
+DEFAULT_MAX_STDERR_BYTES = 1024 * 1024
+
+
+class _CappedWriter(io.TextIOBase):
+    """Text-Writer, der nach `limit` Bytes keine weiteren Daten mehr haelt.
+
+    Verhindert unbegrenztes stdout/stderr-Wachstum durch haengengebliebene
+    oder sehr gespraechige Tasks. `overflowed` wird gesetzt, sobald Daten
+    verworfen wurden; der Aufrufer kann das als `truncated`-Flag melden.
+    """
+
+    def __init__(self, limit):
+        super().__init__()
+        self._limit = max(limit, 0)
+        self._buf = io.StringIO()
+        self._written = 0
+        self.overflowed = False
+
+    def write(self, s):
+        if not s:
+            return 0
+        text = str(s)
+        if self._written >= self._limit:
+            self.overflowed = True
+            return len(text)
+        room = self._limit - self._written
+        if len(text) > room:
+            self._buf.write(text[:room])
+            self._written += room
+            self.overflowed = True
+            return len(text)
+        self._buf.write(text)
+        self._written += len(text)
+        return len(text)
+
+    def getvalue(self):
+        return self._buf.getvalue()
+
+
 
 class ScriptContext:
     __slots__ = ("namespace", "source_hash")
@@ -52,11 +95,22 @@ class ScriptHost:
     """One per Python instance. All methods run in the instance's single
     worker thread (see server.py), so no locking is required."""
 
-    def __init__(self):
+    def __init__(self, max_stdout_bytes=DEFAULT_MAX_STDOUT_BYTES,
+                 max_stderr_bytes=DEFAULT_MAX_STDERR_BYTES):
         self.contexts = {}
+        self.max_stdout_bytes = max_stdout_bytes
+        self.max_stderr_bytes = max_stderr_bytes
         # Set of task ids the client asked to cancel. Checked at job start;
         # a running task cannot be interrupted safely (documented).
         self.cancelled = set()
+
+    def configure(self, max_stdout_bytes=None, max_stderr_bytes=None):
+        """Updates the capture caps (called from the server when the client
+        announces its configured limits in HELLO)."""
+        if max_stdout_bytes is not None:
+            self.max_stdout_bytes = int(max_stdout_bytes)
+        if max_stderr_bytes is not None:
+            self.max_stderr_bytes = int(max_stderr_bytes)
 
     def _context(self, context_id):
         ctx = self.contexts.get(context_id)
@@ -145,7 +199,8 @@ class ScriptHost:
         source = str(message.get("source", ""))
         data = message.get("data") or {}
 
-        stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+        stdout_buf, stderr_buf = _CappedWriter(self.max_stdout_bytes), \
+            _CappedWriter(self.max_stderr_bytes)
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
                 if command == protocol.CMD_CALL:
@@ -168,6 +223,8 @@ class ScriptHost:
             "status": "ok" if err is None else "error",
             "stdout": stdout_buf.getvalue(),
             "stderr": stderr_buf.getvalue(),
+            "stdout_truncated": stdout_buf.overflowed,
+            "stderr_truncated": stderr_buf.overflowed,
             "ms": _now_ms() - start_ms,
         }
         if err is not None:

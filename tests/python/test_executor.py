@@ -98,6 +98,25 @@ class ExecutorTest(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(result, "hi x")
 
+    def test_stdout_truncated_at_cap(self):
+        host = executor.ScriptHost(max_stdout_bytes=16, max_stderr_bytes=16)
+        job = {"id": "jcap", "command": "run", "context": "c",
+               "source": "print('x' * 100)\nresult = 1", "data": {}}
+        body = host.execute_job(job)
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(len(body["stdout"]), 16)
+        self.assertTrue(body["stdout_truncated"])
+        self.assertFalse(body["stderr_truncated"])
+
+    def test_configure_caps(self):
+        host = executor.ScriptHost()
+        host.configure(max_stdout_bytes=8, max_stderr_bytes=8)
+        job = {"id": "jcap2", "command": "run", "context": "c",
+               "source": "print('abcdefghij')\nresult = 1", "data": {}}
+        body = host.execute_job(job)
+        self.assertEqual(body["stdout"], "abcdefgh")
+        self.assertTrue(body["stdout_truncated"])
+
 
 if __name__ == "__main__":
     unittest.main()

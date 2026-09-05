@@ -101,6 +101,14 @@ func _launch() -> void:
 	cmd.append(ws + "/tmp")
 	cmd.append("--tag")
 	cmd.append(instance_name)
+	# Output-/Resultat-Caps: werden beim Start gesetzt, damit der Python-Server
+	# stdout/stderr begrenzt erfassen und zu grosse Ergebnisse ablehnen kann.
+	cmd.append("--max-stdout-bytes")
+	cmd.append(str(int(_settings.get("max_stdout_bytes", 1024 * 1024))))
+	cmd.append("--max-stderr-bytes")
+	cmd.append(str(int(_settings.get("max_stderr_bytes", 1024 * 1024))))
+	cmd.append("--max-result-bytes")
+	cmd.append(str(int(_settings.get("max_result_bytes", 256 * 1024 * 1024))))
 	_process = BridgeProcessManager.new()
 	if not _process.start(cmd):
 		_last_error = "Process launch failed."

@@ -99,6 +99,42 @@ func test_timeout() -> void:
 	assert_true(timed_out.has("to1"))
 	assert_eq(t.state, PythonBridgeTask.State.TIMEOUT)
 
+func test_queue_timeout_does_not_kill_queued_early() -> void:
+	# Execution timeout (50 ms) starts at RUNNING, not at submission: a task
+	# that waits 40 ms in the queue must not time out before it ran.
+	var tm := PythonBridgeTaskManager.new(_cfg())
+	var t := PythonBridgeTask.make_call("q1", "ctx", "s", "f", [], {}, 50)
+	tm.submit(t, 0)
+	# still queued at now=40: created 40 ms ago < queue_timeout (60000 default)
+	var timed_out := tm.check_timeouts(40)
+	assert_false(timed_out.has("q1"))
+	assert_eq(t.state, PythonBridgeTask.State.QUEUED)
+
+func test_queue_timeout_caps_wait_for_slot() -> void:
+	var cfg := PythonBridgeConfig.normalize({"queue_timeout_ms": 30})
+	var tm := PythonBridgeTaskManager.new(cfg)
+	var t := PythonBridgeTask.make_call("q2", "ctx", "s", "f", [], {}, 500)
+	tm.submit(t, 0)
+	# never dispatched; 100 ms queue wait > 30 ms queue cap -> queue timeout
+	var timed_out := tm.check_timeouts(100)
+	assert_false(timed_out.has("q2"), "queued task is not a RUNNING timeout")
+	assert_eq(t.state, PythonBridgeTask.State.TIMEOUT)
+	assert_eq(t.result.error.get("reason", ""), "queue")
+
+func test_execution_timeout_counts_from_running() -> void:
+	var tm := PythonBridgeTaskManager.new(_cfg())
+	var t := PythonBridgeTask.make_call("ex1", "ctx", "s", "f", [], {}, 50)
+	tm.submit(t, 0)
+	# dispatched at 1000, checked at 1030: 30 ms of execution < 50 ms cap
+	var unit := tm.next_unit("inst", 1000)
+	tm.mark_unit_running("inst", unit, 1000)
+	var timed_out := tm.check_timeouts(1030)
+	assert_false(timed_out.has("ex1"))
+	# still running at 1060: 60 ms of execution > 50 ms cap
+	var timed_out2 := tm.check_timeouts(1060)
+	assert_true(timed_out2.has("ex1"))
+	assert_eq(t.state, PythonBridgeTask.State.TIMEOUT)
+
 func test_batching_window_groups_tasks() -> void:
 	var tm := PythonBridgeTaskManager.new(_cfg())
 	var now := 1000

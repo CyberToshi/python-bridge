@@ -69,11 +69,27 @@ def build_text(message):
 
 
 def build_binary(header, chunks):
+    """Header + chunks als ein Binary-Frame.
+
+    Verwendet einen vorab allokierten bytearray anstelle wiederholter
+    bytes-Konkatenation (O(n^2) -> O(n)); grosse Payloads erzeugen so keine
+    wachsenden Zwischenkopien.
+    """
     head = header.encode("utf-8")
-    out = struct.pack("<I", len(head)) + head
+    total = 4 + len(head)
     for chunk in chunks:
-        out += struct.pack("<I", len(chunk)) + chunk
-    return out
+        total += 4 + len(chunk)
+    out = bytearray(total)
+    struct.pack_into("<I", out, 0, len(head))
+    pos = 4
+    out[pos:pos + len(head)] = head
+    pos += len(head)
+    for chunk in chunks:
+        struct.pack_into("<I", out, pos, len(chunk))
+        pos += 4
+        out[pos:pos + len(chunk)] = chunk
+        pos += len(chunk)
+    return bytes(out)
 
 
 def build_response(msg_type, msg_id, status, data=None, error=None, ms=0):

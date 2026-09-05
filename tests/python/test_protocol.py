@@ -57,6 +57,36 @@ class ProtocolTest(unittest.TestCase):
         msg2, _ = protocol.parse(b"\x01\x02")
         self.assertEqual(msg2.get("type"), "malformed")
 
+    def test_build_binary_matches_legacy_layout(self):
+        """Der bytearray-basierte Builder muss byte-identisch zum alten
+        Layout sein (U32LE(header_len) + header + je U32LE(chunk_len)+chunk)."""
+        head = json.dumps({"v": 2, "type": "task_result", "id": "x"})
+        chunks = [bytes(i) for i in range(7)] + [bytes(4096)]
+        out = protocol.build_binary(head, chunks)
+        import struct
+        (hlen,) = struct.unpack("<I", out[:4])
+        self.assertEqual(out[4:4 + hlen].decode("utf-8"), head)
+        off = 4 + hlen
+        idx = 0
+        while off + 4 <= len(out):
+            (clen,) = struct.unpack("<I", out[off:off + 4])
+            self.assertEqual(out[off + 4:off + 4 + clen], chunks[idx])
+            off += 4 + clen
+            idx += 1
+        self.assertEqual(idx, len(chunks))
+        self.assertEqual(off, len(out))
+
+    def test_build_binary_empty_chunks(self):
+        head = json.dumps({"v": 2, "type": "ping", "id": "p"})
+        out = protocol.build_binary(head, [])
+        # build_binary erzeugt immer den U32LE(header_len)-Rahmen; der
+        # Header-Bereich muss exakt dem JSON-String entsprechen.
+        import struct
+        (hlen,) = struct.unpack("<I", out[:4])
+        self.assertEqual(hlen, len(head))
+        self.assertEqual(out[4:4 + hlen].decode("utf-8"), head)
+        self.assertEqual(len(out), 4 + len(head))
+
 
 if __name__ == "__main__":
     unittest.main()

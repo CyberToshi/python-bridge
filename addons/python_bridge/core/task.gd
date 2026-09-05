@@ -8,8 +8,10 @@ extends RefCounted
 ## Task IDs are unique per bridge lifetime. `instance_id` selects a specific
 ## instance; empty string means "auto-assign to any ready instance".
 ## `priority` is an integer where 0 is the highest priority.
-## `timeout_ms` bounds the total lifetime (queue wait + execution).
-## `batchable` allows the scheduler to merge this task into a batch frame.
+## `timeout_ms` bounds the EXECUTION time (measured from RUNNING); waiting
+## for a worker slot is bounded separately by the queue timeout (see
+## task manager). `batchable` allows the scheduler to merge this task into a
+## batch frame.
 
 enum State { QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, TIMEOUT }
 
@@ -19,6 +21,7 @@ var id: String = ""
 var instance_id: String = ""          # "" = auto-assign
 var priority: int = 0                 # 0 = highest
 var created_at_ms: int = 0
+var queued_at_ms: int = 0          # last entry into the queue (timeout anchor)
 var state: int = State.QUEUED
 var command: String = PythonProtocol.CMD_RUN  # run | call | define
 var context_id: String = ""
@@ -27,7 +30,8 @@ var input: Variant = null             # run: the `input` variable
 var function: String = ""             # call: function name
 var args: Array = []                  # call: positional args
 var kwargs: Dictionary = {}           # call: keyword args
-var timeout_ms: int = 0
+var timeout_ms: int = 0              # execution timeout, counted from RUNNING
+var started_at_ms: int = 0           # set when the task transitions to RUNNING
 var max_retries: int = 0
 var retries_left: int = 0
 var retry_policy: String = "connection_error"

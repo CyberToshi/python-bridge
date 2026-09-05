@@ -58,6 +58,7 @@ func submit(task: PythonBridgeTask, now_ms: int) -> PythonBridgeResult:
 				"Task payload too large (%d bytes > %d)" % [payload, max_payload],
 				task.id))
 	task.created_at_ms = now_ms
+	task.queued_at_ms = now_ms
 	task.max_retries = int(_cfg.get("max_retries", 0))
 	task.retries_left = task.max_retries
 	task.retry_policy = str(_cfg.get("retry_policy", "connection_error"))
@@ -182,22 +183,37 @@ func tick_windows(_now_ms: int) -> void:
 ## Called by the scheduler every frame to check timeouts. Returns the list of
 ## task ids that timed out while RUNNING so the scheduler can send
 ## best-effort CANCEL messages.
+##
+## Timeout semantics (v3):
+##   - QUEUED tasks wait up to `queue_timeout_ms` (config; 0 = unlimited).
+##   - RUNNING tasks get `task.timeout_ms` measured from `started_at_ms`.
+## Queue time is therefore not charged against the execution timeout and a
+## task is never reported as an execution timeout before it actually ran.
 func check_timeouts(now_ms: int) -> Array:
 	var timed_out: Array = []
+	var queue_timeout_ms := int(_cfg.get("queue_timeout_ms", 60000))
 	for t in _by_id.values():
 		var task := t as PythonBridgeTask
 		if task.is_terminal():
 			continue
-		if task.timeout_ms > 0 and now_ms - task.created_at_ms > task.timeout_ms:
-			if task.state == PythonBridgeTask.State.RUNNING:
+		if task.state == PythonBridgeTask.State.RUNNING:
+			var start_ms := task.started_at_ms if task.started_at_ms > 0 else task.created_at_ms
+			if task.timeout_ms > 0 and now_ms - start_ms > task.timeout_ms:
 				timed_out.append(task.id)
-			else:
-				# Queued task timed out: drop it from the queue as well.
-				_queue.erase(task)
-			_finish(task, PythonBridgeResult.failed_with_error(
-				PythonBridgeErrorHandler.make(
-					PythonBridgeErrorHandler.CATEGORY_TIMEOUT_ERROR,
-					"Task timeout after %d ms" % task.timeout_ms, task.id), task.id))
+				_finish(task, PythonBridgeResult.failed_with_error(
+					PythonBridgeErrorHandler.make(
+						PythonBridgeErrorHandler.CATEGORY_TIMEOUT_ERROR,
+						"Task execution timeout after %d ms" % task.timeout_ms,
+						task.id), task.id))
+		elif queue_timeout_ms > 0 and now_ms - task.queued_at_ms > queue_timeout_ms:
+			# Queued task waited too long for a worker slot: drop it and
+			# report a queue timeout (distinct from execution timeout).
+			_queue.erase(task)
+			var err := PythonBridgeErrorHandler.make(
+				PythonBridgeErrorHandler.CATEGORY_TIMEOUT_ERROR,
+				"Task queue timeout after %d ms" % queue_timeout_ms, task.id)
+			err["reason"] = "queue"
+			_finish(task, PythonBridgeResult.failed_with_error(err, task.id))
 	return timed_out
 
 ## Called by the scheduler when a frame arrives from an instance.
@@ -292,16 +308,22 @@ func fail_in_flight(instance_id: String, err: Dictionary, now_ms := -1) -> void:
 
 ## Marks the tasks of a dispatched unit as RUNNING. `instance_id` is the
 ## concrete instance the scheduler chose (resolves auto-assignment).
-func mark_unit_running(instance_id: String, unit: Dictionary) -> void:
+## `started_ms` is the dispatch timestamp. When omitted it falls back to the
+## creation time, which keeps direct (synthetic) test usage deterministic:
+## a task marked running without an explicit clock is treated as "started
+## when created". The scheduler always passes the real dispatch time.
+func mark_unit_running(instance_id: String, unit: Dictionary, started_ms := -1) -> void:
 	if unit.get("kind") == "single":
 		var task: PythonBridgeTask = unit["task"]
 		task.state = PythonBridgeTask.State.RUNNING
 		task.instance_id = instance_id
+		task.started_at_ms = started_ms if started_ms >= 0 else task.created_at_ms
 	elif unit.get("kind") == "batch":
 		for t in unit.get("tasks", []):
 			var task2 := t as PythonBridgeTask
 			task2.state = PythonBridgeTask.State.RUNNING
 			task2.instance_id = instance_id
+			task2.started_at_ms = started_ms if started_ms >= 0 else task2.created_at_ms
 
 # ------------------------------------------------------------------ Batching
 func _peek_batch_candidates(instance_id: String) -> Array:
@@ -368,6 +390,8 @@ func _should_retry(task: PythonBridgeTask, err: Dictionary) -> bool:
 func _requeue(task: PythonBridgeTask, now_ms: int) -> void:
 	task.retries_left -= 1
 	task.state = PythonBridgeTask.State.QUEUED
+	task.queued_at_ms = now_ms
+	task.started_at_ms = 0
 	task._next_attempt_ms = now_ms + int(_cfg.get("retry_delay_ms", 250))
 	_insert_sorted(task)
 
