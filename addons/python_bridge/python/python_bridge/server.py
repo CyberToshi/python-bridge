@@ -71,17 +71,26 @@ async def _handle_connection(ws, state):
         max_stderr_bytes=caps.get("max_stderr_bytes", executor.DEFAULT_MAX_STDERR_BYTES))
     max_result_bytes = int(caps.get("max_result_bytes", DEFAULT_MAX_RESULT_BYTES))
     data_store = DataStore(int(caps.get("data_ref_threshold_bytes", 0) or 0))
-    executor_pool = ThreadPoolExecutor(max_workers=1)
+    # Phase 3: mehrere Worker-Slots pro Instanz. Tasks unterschiedlicher
+    # Contexts koennen parallel laufen (I/O, NumPy); gleiche Contexts werden
+    # ueber Context-Locks serialisiert. Default 1 = bisherige Semantik.
+    workers = max(1, int(caps.get("workers_per_instance", 1) or 1))
+    runaway_grace_ms = max(0, int(caps.get("runaway_grace_ms", 10000) or 0))
+    executor_pool = ThreadPoolExecutor(max_workers=workers)
     job_queue = asyncio.Queue()
     send_lock = asyncio.Lock()
     loop = asyncio.get_running_loop()
+    # Watchdog: futures, deren Job per Timeout abgebrochen wurde, aber deren
+    # Worker-Thread tatsaechlich weiterlaeuft (nicht killbar). Laeuft die
+    # Frist (runaway_grace_ms) ab, wird der Prozess beendet - Godot startet
+    # ihn ueber die bestehende Restart-Policy neu.
+    stuck = {}  # future -> monotonic deadline
 
     state["connections"] += 1
     try:
-        # Worker task: consumes the job queue, runs user code, responds.
-        # Data-Operationen (GET) laufen im selben einzigen Worker, damit sie
-        # nie parallel zu einem laufenden User-Job auf den Store zugreifen.
-        async def _worker():
+        async def _consumer():
+            """Ein Consumer pro Worker-Slot: holt Jobs aus der Queue, laesst
+            sie (context-gesperrt) im Pool laufen und antwortet."""
             while True:
                 message = await job_queue.get()
                 if state["shutdown"]:
@@ -91,9 +100,30 @@ async def _handle_connection(ws, state):
                                         data_store, message, max_result_bytes)
                 else:
                     await _run_job(ws, send_lock, loop, executor_pool, host,
-                                   data_store, message, max_result_bytes)
+                                   data_store, message, max_result_bytes,
+                                   stuck, runaway_grace_ms)
 
-        worker_task = asyncio.create_task(_worker())
+        worker_tasks = [asyncio.create_task(_consumer()) for _ in range(workers)]
+
+        async def _watchdog():
+            """Beendet den Prozess, wenn ein per Timeout abgebrochener Job
+            nach der Grace-Frist immer noch rechnet (Kill-on-Runaway)."""
+            while not state["shutdown"]:
+                await asyncio.sleep(0.2)
+                now = loop.time()
+                doomed = False
+                for fut, deadline in list(stuck.items()):
+                    if fut.done():
+                        stuck.pop(fut, None)
+                    elif now > deadline:
+                        doomed = True
+                if doomed:
+                    print("[python_bridge] runaway worker detected - "
+                          "terminating process (restart via bridge policy)",
+                          flush=True)
+                    os._exit(1)
+
+        watchdog_task = asyncio.create_task(_watchdog())
 
         try:
             async for raw in ws:
@@ -175,9 +205,16 @@ async def _handle_connection(ws, state):
                                "message": "Unknown message type: %s" % mtype,
                                "traceback": ""}))
         finally:
-            worker_task.cancel()
+            for task in worker_tasks:
+                task.cancel()
+            for task in worker_tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            watchdog_task.cancel()
             try:
-                await worker_task
+                await watchdog_task
             except asyncio.CancelledError:
                 pass
             executor_pool.shutdown(wait=False, cancel_futures=True)
@@ -200,8 +237,25 @@ def _ref_or_encode(value, data_store, chunks):
     return _encode_with_chunks(value, chunks)
 
 
+def _job_fn(host, message):
+    """Fuehrt eine Task-/Batch-Message unter den Context-Locks aus. Laueft im
+    Worker-Thread: gleiche Contexts serialisieren sich (geteilte Namespaces),
+    verschiedene Contexts koennen parallel laufen."""
+    with host.acquire_contexts(host.unique_contexts(message)):
+        if message.get("type") == protocol.MSG_BATCH:
+            return [host.execute_job(item)
+                    for item in message.get(protocol.FIELD_ITEMS, [])]
+        return host.execute_job(message)
+
+
+def _register_stuck(stuck, future, loop, runaway_grace_ms):
+    """Merkt einen weiterlaufenden (nicht killbaren) Job fuer den Watchdog."""
+    if runaway_grace_ms > 0 and not future.done():
+        stuck[future] = loop.time() + runaway_grace_ms / 1000.0
+
+
 async def _run_job(ws, send_lock, loop, executor_pool, host, data_store, message,
-                   max_result_bytes):
+                   max_result_bytes, stuck, runaway_grace_ms):
     """Runs one task or batch message in the worker thread and responds."""
     msg_id = str(message.get("id", ""))
     timeout_ms = int(message.get("timeout_ms", 0) or 0)
@@ -209,13 +263,13 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, data_store, message
 
     if message.get("type") == protocol.MSG_BATCH:
         items = message.get(protocol.FIELD_ITEMS, [])
+        future = loop.run_in_executor(executor_pool, _job_fn, host, message)
         try:
-            bodies = await asyncio.wait_for(
-                loop.run_in_executor(
-                    executor_pool,
-                    lambda: [host.execute_job(item) for item in items]),
-                timeout)
+            # shield: wait_for darf das Future NICHT canceln - der Watchdog
+            # muss den weiterlaufenden (nicht killbaren) Thread erkennen.
+            bodies = await asyncio.wait_for(asyncio.shield(future), timeout)
         except asyncio.TimeoutError:
+            _register_stuck(stuck, future, loop, runaway_grace_ms)
             await _send_text(ws, send_lock, _task_error_body(
                 msg_id, protocol.CATEGORY_TIMEOUT_ERROR,
                 "Batch timeout after %d ms" % timeout_ms))
@@ -253,11 +307,12 @@ async def _run_job(ws, send_lock, loop, executor_pool, host, data_store, message
         return
 
     # Single task
+    future = loop.run_in_executor(executor_pool, _job_fn, host, message)
     try:
-        body = await asyncio.wait_for(
-            loop.run_in_executor(executor_pool, host.execute_job, message),
-            timeout)
+        # shield: siehe Batch-Zweig (Watchdog benoetigt das laufende Future).
+        body = await asyncio.wait_for(asyncio.shield(future), timeout)
     except asyncio.TimeoutError:
+        _register_stuck(stuck, future, loop, runaway_grace_ms)
         await _send_text(ws, send_lock, _task_error_body(
             msg_id, protocol.CATEGORY_TIMEOUT_ERROR,
             "Task timeout after %d ms" % timeout_ms))

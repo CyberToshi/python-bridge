@@ -15,6 +15,7 @@ import time
 import unittest
 
 import websockets
+import websockets.exceptions
 
 PY_DIR = os.path.join(os.path.dirname(__file__),
                       "..", "..", "addons", "python_bridge", "python")
@@ -384,6 +385,188 @@ class ServerIntegrationTest(unittest.TestCase):
                 tmp_proc.wait(timeout=5)
             except Exception:
                 pass
+
+    def _spawn(self, extra, tag="w"):
+        """Separate Server-Prozess mit zusaetzlichen CLI-Argumenten."""
+        proc, info = _start_server(self._tmpdir, tag=tag, extra=extra)
+        return proc, info["port"]
+
+    @staticmethod
+    def _timestamps(msg):
+        out = {}
+        for line in str(msg.get("stdout", "")).splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                out[parts[0]] = float(parts[1])
+        return out
+
+    def test_workers_parallel_across_contexts(self):
+        """workers=2: unabhaengige Contexts laufen parallel (ueberlappende
+        Ausfuehrungszeit), nicht seriell nacheinander."""
+        proc, port = self._spawn(["--workers", "2"], tag="wp")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src_a = ("import time\n"
+                         "print('A_START', time.time(), flush=True)\n"
+                         "time.sleep(0.8)\n"
+                         "print('A_END', time.time(), flush=True)\n"
+                         "result = 1\n")
+                src_b = ("import time\n"
+                         "print('B_START', time.time(), flush=True)\n"
+                         "time.sleep(0.05)\n"
+                         "result = 2\n")
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "pa",
+                    "command": "run", "context": "ca", "source": src_a,
+                    "data": {"input": None}}))
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "pb",
+                    "command": "run", "context": "cb", "source": src_b,
+                    "data": {"input": None}}))
+                msgs = {}
+                for _ in range(2):
+                    msg, _data = await self._recv(ws)
+                    msgs[msg["id"]] = msg
+                ts_a = self._timestamps(msgs["pa"])
+                ts_b = self._timestamps(msgs["pb"])
+                self.assertEqual(msgs["pa"]["status"], "ok")
+                self.assertEqual(msgs["pb"]["status"], "ok")
+                self.assertLess(
+                    ts_b["B_START"], ts_a["A_END"] - 0.1,
+                    "independent context B started while A was still running")
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_same_context_stays_serialized_with_workers(self):
+        """workers=2: Tasks desselben Contexts laufen nie parallel."""
+        proc, port = self._spawn(["--workers", "2"], tag="ws")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src_a = ("import time\n"
+                         "print('A_START', time.time(), flush=True)\n"
+                         "time.sleep(0.5)\n"
+                         "print('A_END', time.time(), flush=True)\n"
+                         "result = 1\n")
+                src_b = ("import time\n"
+                         "print('B_START', time.time(), flush=True)\n"
+                         "result = 2\n")
+                for i, (ctx, src) in enumerate([("sx", src_a), ("sx", src_b)]):
+                    await ws.send(protocol.build_text({
+                        "v": 2, "type": protocol.MSG_TASK, "id": "s%d" % i,
+                        "command": "run", "context": ctx, "source": src,
+                        "data": {"input": None}}))
+                msgs = {}
+                for _ in range(2):
+                    msg, _ = await self._recv(ws)
+                    msgs[msg["id"]] = msg
+                ts_a = self._timestamps(msgs["s0"])
+                ts_b = self._timestamps(msgs["s1"])
+                self.assertGreaterEqual(
+                    ts_b["B_START"], ts_a["A_END"] - 0.02,
+                    "same context must not overlap (context lock)")
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_runaway_does_not_block_independent_context(self):
+        """Ein blockierter (timeout-ueberschrittener) Task belegt nur seinen
+        Slot: ein unabhaengiger Context laeuft mit workers=2 trotzdem durch."""
+        proc, port = self._spawn(["--workers", "2"], tag="wr")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src_a = "import time; time.sleep(5); result = 1"
+                src_b = "result = 42"
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "ra",
+                    "command": "run", "context": "ra", "source": src_a,
+                    "timeout_ms": 250, "data": {"input": None}}))
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "rb",
+                    "command": "run", "context": "rb", "source": src_b,
+                    "data": {"input": None}}))
+                msgs = {}
+                for _ in range(2):
+                    msg, data = await self._recv(ws)
+                    msgs[msg["id"]] = (msg, data)
+                msg_a, _ = msgs["ra"]
+                msg_b, data_b = msgs["rb"]
+                self.assertEqual(msg_a["status"], "error")
+                self.assertEqual(msg_a["error"]["code"],
+                                 protocol.CATEGORY_TIMEOUT_ERROR)
+                self.assertEqual(msg_b["status"], "ok",
+                                 "independent context must not wait for the runaway")
+                self.assertEqual(data_b, 42)
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_kill_on_runaway_after_grace(self):
+        """Watchdog: laeuft ein timeout-ueberschrittener Job nach der
+        Grace-Frist weiter, beendet der Prozess sich selbst (kein Zombie)."""
+        import time as _time
+        proc, port = self._spawn(
+            ["--workers", "1", "--runaway-grace-ms", "600"], tag="wk")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % port,
+                    subprotocols=["pybridge-v2"],
+                    max_size=512 * 1024 * 1024) as ws:
+                src = "import time; time.sleep(60); result = 1"
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "k1",
+                    "command": "run", "context": "kk", "source": src,
+                    "timeout_ms": 200, "data": {"input": None}}))
+                msg, _ = await self._recv(ws)
+                self.assertEqual(msg["status"], "error")
+                self.assertEqual(msg["error"]["code"],
+                                 protocol.CATEGORY_TIMEOUT_ERROR)
+                # Watchdog beendet den Prozess nach der Grace-Frist -> die
+                # Verbindung schliesst sich von selbst.
+                closed = False
+                try:
+                    await ws.recv()
+                except websockets.exceptions.ConnectionClosed:
+                    closed = True
+                self.assertTrue(closed, "watchdog must terminate the connection")
+
+        try:
+            import asyncio
+            asyncio.run(run())
+        finally:
+            # Prozess muss sich selbst beendet haben (kein Zombie).
+            deadline = _time.time() + 4.0
+            while _time.time() < deadline and proc.poll() is None:
+                _time.sleep(0.05)
+            self.assertIsNotNone(proc.poll(), "runaway process must exit itself")
+            if proc.poll() is None:  # pragma: no cover - safety
+                proc.kill()
+                proc.wait(timeout=5)
 
     def test_shutdown_ack(self):
         async def run():
