@@ -19,9 +19,9 @@ func _initialize() -> void:
 
 	# 2) The dock panel must be somewhere under the editor UI, with its
 	#    internal controls built (script list, code editor, action buttons).
-	var found := _find_named(root, "PythonBridgePanel")
+	var found := _find_named(root, "Python Bridge")
 	if found:
-		print("[VERIFY] OK: dock panel 'PythonBridgePanel' found at ",
+		print("[VERIFY] OK: dock panel 'Python Bridge' found at ",
 			str(found).get_slice(":", 1))
 		var file_list := _find_class(found, "ItemList")
 		var code_edit := _find_class(found, "CodeEdit")
@@ -33,7 +33,7 @@ func _initialize() -> void:
 				", code_edit=", code_edit, ", log=", log_view, ")")
 			ok = false
 	else:
-		print("[VERIFY] FAIL: dock panel 'PythonBridgePanel' not found in editor UI")
+		print("[VERIFY] FAIL: dock panel 'Python Bridge' not found in editor UI")
 		ok = false
 
 	# 3) Plugin must be enabled in project settings.

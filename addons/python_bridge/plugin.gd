@@ -20,7 +20,8 @@ func _enter_tree() -> void:
 		add_autoload_singleton(AUTOLOAD_NAME, plugin_dir + "/core/python_bridge.gd")
 
 	_panel = PythonBridgeEditorPanel.new(_get_bridge())
-	_panel.name = "PythonBridgePanel"
+	# Der Node-Name ist zugleich der Dock-Tab-Titel im Editor.
+	_panel.name = "Python Bridge"
 	add_control_to_dock(DockSlot.DOCK_SLOT_RIGHT_UL, _panel)
 
 func _exit_tree() -> void:
