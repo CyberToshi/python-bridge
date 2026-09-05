@@ -40,8 +40,26 @@
 - **Neue Doku** `docs/DATA_PLANE.md`; `docs/ARCHITEKTUR_V3.md`-Status auf
   „Phasen 0–2 umgesetzt“ aktualisiert.
 
-**Tests:** GDScript-Suite 52 Tests / 167 Assertions, Python-Suite 61 Tests
-(inkl. DataStore-Unit- und DataRef-Server-Integrationstests).
+### Phase 3 — Worker & Recovery (Commits `623a23b`, `f6cfb1e`)
+
+- **Mehrere Worker-Slots pro Instanz**: `workers_per_instance` (Python) +
+  `max_inflight_per_instance` (Godot) — Tasks verschiedener Contexts
+  laufen parallel, gleiche Contexts strikt seriell (Context-Locks in
+  sortierter Reihenfolge, deadlock-frei; Godot-Scheduler dispatched busy
+  Contexts nicht doppelt via `running_contexts()`).
+- **Runaway-Isolation**: Ein per Timeout abgebrochener Task belegt nur
+  seinen Slot; unabhaengige Contexts laufen weiter.
+- **Kooperative Cancellation**: `__bridge__.cancel_requested()` /
+  `__bridge__.checkpoint()` im Python-Code; strukturierter Abbruch
+  (`status=cancelled`).
+- **Watchdog / Kill-on-Runaway**: laeuft ein Job nach `runaway_grace_ms`
+  weiter, beendet sich der Prozess selbst (kein Zombie); Godot restartet
+  ueber die bestehende Restart-Policy.
+- **Neue Doku** `docs/WORKERS.md`; V3-Status auf „Phasen 0–3 umgesetzt“.
+
+**Tests:** GDScript-Suite 55 Tests / 179 Assertions (3 busy-Context-Tests),
+Python-Suite 74 Tests (9 Worker-/Cancel-Unit-Tests, 4 Worker-
+Integrationstests inkl. Kill-on-Runaway).
 
 ## v0.2.1 (current)
 

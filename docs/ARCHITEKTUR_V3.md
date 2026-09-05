@@ -1,8 +1,8 @@
 # Python Bridge — Architekturplan der nächsten Generation
 
-**Status:** teilweise umgesetzt — Phase 0 (Messbarkeit/Quick Wins), Phase 1
-(Code Plane/ScriptRegistry) und Phase 2 (Data Plane, Kern) sind implementiert
-und getestet (Stand der Commits `f625c7b`…`2c5fbc5`). Phase 3–5 bleiben
+**Status:** teilweise umgesetzt — Phase 0 (Quick Wins), Phase 1 (Code Plane),
+Phase 2 (Data Plane, Kern) und Phase 3 (Worker & Recovery) sind implementiert
+und getestet (Stand der Commits `64a9cd9`…`f6cfb1e`). Phasen 4–5 bleiben
 Umsetzungsplan; Shared Memory/mmap (Abschnitt 6) ist bewusst noch nicht
 gebaut. Die Implementierungsentscheidungen sind unten pro Phase markiert.
 
@@ -1257,14 +1257,23 @@ WebSockets bleiben für Control und mittelgroße Daten ausreichend. Ein zweiter 
 
 ## Phase 3 — Worker und Recovery
 
-**Priorität:** sinnvoll
+**Priorität:** sinnvoll — **Kern umgesetzt (Commits `623a23b`, `f6cfb1e`)**
 
-1. `workers_per_instance`.
-2. Context-Locks.
-3. getrennte Worker-Slots und Slot-Timeouts.
-4. kooperative Cancellation-API.
-5. Watchdog und konfigurierter Kill-on-Runaway.
-6. Instanzgruppen und load-aware Routing.
+1. ✅ `workers_per_instance` (Python: N Worker-Threads; Godot:
+   `max_inflight_per_instance` + busy-Context-Dispatch).
+2. ✅ Context-Locks — gleiche Contexts strikt seriell, verschiedene
+   parallel; Batch-Jobs sperren ihre Contexts sortiert (deadlock-frei).
+3. ✅ Getrennte Worker-Slots — ein blockierter Task belegt nur seinen Slot;
+   unabhaengige Contexts laufen weiter. Timeouts messen weiterhin ab
+   Dispatch (Godot dispatched gleiche Contexts nie doppelt).
+4. ✅ Kooperative Cancellation-API — `__bridge__.cancel_requested()` /
+   `checkpoint()`; Abbruch endet strukturiert mit status="cancelled".
+5. ✅ Watchdog / Kill-on-Runaway — laeuft ein per Timeout abgebrochener Job
+   nach `runaway_grace_ms` weiter, beendet sich der Prozess selbst; Godot
+   restartet ueber die bestehende Policy (keine Zombies, Context-Verlust
+   wird durch die ScriptRegistry selbstheilend wieder aufgebaut).
+6. ⚠️ Instanzgruppen / load-aware Routing — Ausbaustufe (echte
+   CPU-Parallelitaet braucht mehrere Prozesse).
 
 **Akzeptanzkriterien:** Ein blockierter Worker verhindert nicht die Ausführung unabhängiger Contexts, sofern freie Slots vorhanden sind; ein Hard-Recovery hinterlässt keine Python-Prozesse; Context-Verlust wird strukturiert gemeldet.
 
