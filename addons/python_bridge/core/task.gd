@@ -12,6 +12,15 @@ extends RefCounted
 ## for a worker slot is bounded separately by the queue timeout (see
 ## task manager). `batchable` allows the scheduler to merge this task into a
 ## batch frame.
+##
+## Source handling (Code Plane / ScriptRegistry):
+##   - `source` is the inline source that *defines* a context (first call,
+##     changed script, temp code).
+##   - `source_hash` is its SHA-256. When the target instance already has
+##     this context+hash defined (registry), the dispatcher may drop the
+##     inline source and reference only the hash.
+##   - `_source_sent` records whether the last built message carried the
+##     source (used to confirm the registry after an ok result).
 
 enum State { QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, TIMEOUT }
 
@@ -21,17 +30,18 @@ var id: String = ""
 var instance_id: String = ""          # "" = auto-assign
 var priority: int = 0                 # 0 = highest
 var created_at_ms: int = 0
-var queued_at_ms: int = 0          # last entry into the queue (timeout anchor)
+var queued_at_ms: int = 0             # last entry into the queue (timeout anchor)
 var state: int = State.QUEUED
 var command: String = PythonProtocol.CMD_RUN  # run | call | define
 var context_id: String = ""
-var source: String = ""
+var source: String = ""               # inline source (defines / temp code)
+var source_hash: String = ""          # sha256 of source (ScriptRegistry)
 var input: Variant = null             # run: the `input` variable
 var function: String = ""             # call: function name
 var args: Array = []                  # call: positional args
 var kwargs: Dictionary = {}           # call: keyword args
-var timeout_ms: int = 0              # execution timeout, counted from RUNNING
-var started_at_ms: int = 0           # set when the task transitions to RUNNING
+var timeout_ms: int = 0               # execution timeout, counted from RUNNING
+var started_at_ms: int = 0            # set when the task transitions to RUNNING
 var max_retries: int = 0
 var retries_left: int = 0
 var retry_policy: String = "connection_error"
@@ -43,6 +53,9 @@ var meta: Dictionary = {}
 ## Internal bookkeeping (task manager / scheduler)
 var _seq: int = 0                     # stable ordering tiebreaker
 var _next_attempt_ms: int = 0         # retry delay; 0 = ready now
+var _source_sent: bool = false        # last built message carried the source
+var _source_resent: bool = false      # one-shot SCRIPT_NOT_DEFINED recovery
+var _force_source: bool = false       # rebuild with source even if defined
 
 func is_terminal() -> bool:
 	return state in [State.COMPLETED, State.FAILED, State.CANCELLED, State.TIMEOUT]

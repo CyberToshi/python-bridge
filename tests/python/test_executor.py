@@ -117,6 +117,70 @@ class ExecutorTest(unittest.TestCase):
         self.assertEqual(body["stdout"], "abcdefgh")
         self.assertTrue(body["stdout_truncated"])
 
+    # --- ScriptRegistry-Semantik (Phase 1 / Code Plane) ---------------------
+    def test_call_without_source_when_hash_known(self):
+        """Ein Call ohne source funktioniert, wenn der Context den Hash
+        bereits kennt (kein erneuter Transfer / kein Recompile)."""
+        src = "def add(a, b):\n    return a + b\n"
+        h = executor._hash(src)
+        result, err = self.host.call("ctx", src, "add", [2, 3], {}, source_hash=h)
+        self.assertIsNone(err)
+        self.assertEqual(result, 5)
+        # zweiter Aufruf OHNE source, nur mit Hash
+        result, err = self.host.call("ctx", "", "add", [4, 5], {}, source_hash=h)
+        self.assertIsNone(err)
+        self.assertEqual(result, 9)
+
+    def test_call_without_source_unknown_hash_fails(self):
+        h = executor._hash("def add(a, b):\n    return a + b\n")
+        result, err = self.host.call("ctx", "", "add", [1, 2], {}, source_hash=h)
+        self.assertIsNone(result)
+        self.assertEqual(err["type"], executor.SCRIPT_NOT_DEFINED)
+
+    def test_changed_hash_redefines_once(self):
+        v1 = "def f():\n    return 1\n"
+        v2 = "def f():\n    return 2\n"
+        h1 = executor._hash(v1)
+        h2 = executor._hash(v2)
+        result, err = self.host.call("ctx", v1, "f", [], {}, source_hash=h1)
+        self.assertEqual(result, 1)
+        # neue Version ohne source -> SCRIPT_NOT_DEFINED (Client muss senden)
+        result, err = self.host.call("ctx", "", "f", [], {}, source_hash=h2)
+        self.assertEqual(err["type"], executor.SCRIPT_NOT_DEFINED)
+        # mit source wird neu definiert
+        result, err = self.host.call("ctx", v2, "f", [], {}, source_hash=h2)
+        self.assertEqual(result, 2)
+
+    def test_run_without_source_reuses_code(self):
+        src = "result = input + 1"
+        h = executor._hash(src)
+        result, err = self.host.run("ctx", src, 1, source_hash=h)
+        self.assertEqual(result, 2)
+        # zweiter Aufruf ohne source nutzt das kompilierte Code-Objekt
+        result, err = self.host.run("ctx", "", 10, source_hash=h)
+        self.assertIsNone(err)
+        self.assertEqual(result, 11)
+
+    def test_hash_mismatch_is_protocol_error(self):
+        src = "def f():\n    return 1\n"
+        wrong = executor._hash("other")
+        result, err = self.host.call("ctx", src, "f", [], {}, source_hash=wrong)
+        self.assertIsNone(result)
+        self.assertEqual(err["code"], protocol.CATEGORY_PROTOCOL_ERROR)
+        self.assertEqual(err["type"], "ProtocolError")
+
+    def test_compile_cache_reuses_code_object(self):
+        src = "result = 1"
+        h = executor._hash(src)
+        # run kompiliert beim ersten Mal und cached ctx.code
+        self.host.run("ctx", src, None, source_hash=h)
+        ctx = self.host.contexts["ctx"]
+        code1 = ctx.code
+        self.assertIsNotNone(code1)
+        # gleicher Hash -> gleiches Code-Objekt (kein Recompile)
+        self.host.run("ctx", "", None, source_hash=h)
+        self.assertIs(ctx.code, code1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,9 +26,16 @@ var _by_id: Dictionary = {}                  # task_id -> PythonBridgeTask
 var _seq: int = 0
 var _batch_seq: int = 0
 var _batch_windows: Dictionary = {}          # instance_id -> {priority, start_ms, tasks, msg_id}
+var _registry: PythonBridgeScriptRegistry = null
 
 func _init(cfg: Dictionary) -> void:
 	_cfg = cfg
+
+## Attaches the ScriptRegistry (Code Plane). Without it every task carries
+## its inline source (legacy behaviour), so the manager stays usable in
+## isolation (unit tests).
+func attach_registry(registry: PythonBridgeScriptRegistry) -> void:
+	_registry = registry
 
 # ------------------------------------------------------------------ Submit
 ## Queues a task or rejects it (backpressure). Returns an ok result when the
@@ -149,7 +156,7 @@ func next_unit(instance_id: String, now_ms: int) -> Dictionary:
 	var task := _pop_front_for(instance_id)
 	if task == null:
 		return {"kind": "none"}
-	return {"kind": "single", "task": task, "msg": _build_task_msg(task)}
+	return {"kind": "single", "task": task, "msg": _build_task_msg(task, instance_id)}
 
 ## Called by the scheduler once per frame: lets queued compatible tasks join
 ## open batch windows (up to max_batch_size). Flushing is decided in
@@ -218,18 +225,18 @@ func check_timeouts(now_ms: int) -> Array:
 
 ## Called by the scheduler when a frame arrives from an instance.
 ## `parsed` is the result of PythonProtocol.parse_frame().
-func resolve_result(_instance_id: String, parsed: Dictionary) -> void:
+func resolve_result(instance_id: String, parsed: Dictionary) -> void:
 	var msg: Dictionary = parsed.get("msg", {})
 	var msg_type := str(msg.get("type", ""))
 	if msg_type == PythonProtocol.MSG_TASK_RESULT or msg_type == PythonProtocol.MSG_TASK_ERROR:
-		_resolve_single(str(msg.get("id", "")), msg)
+		_resolve_single(instance_id, str(msg.get("id", "")), msg)
 	elif msg_type == PythonProtocol.MSG_BATCH_RESULT:
 		var items: Array = msg.get(PythonProtocol.FIELD_ITEMS, [])
 		for item in items:
 			if item is Dictionary:
-				_resolve_single(str(item.get("id", "")), item)
+				_resolve_single(instance_id, str(item.get("id", "")), item)
 
-func _resolve_single(task_id: String, msg: Dictionary) -> void:
+func _resolve_single(instance_id: String, task_id: String, msg: Dictionary) -> void:
 	var task := get_task(task_id)
 	if task == null or task.is_terminal():
 		return # late / already resolved result
@@ -244,11 +251,24 @@ func _resolve_single(task_id: String, msg: Dictionary) -> void:
 				"request_id": task_id,
 				"instance_id": task.instance_id,
 			}))
+			# Der Server kennt den Context nun mit diesem Hash: Registry
+			# bestaetigen, damit Folge-Calls ohne Source auskommen.
+			if task._source_sent and task.source_hash != "" and _registry != null:
+				_registry.confirm(instance_id, task.context_id, task.source_hash)
 		return
 	var err: Dictionary = msg.get("error", {}) if msg.get("error") is Dictionary else {}
 	err = PythonBridgeErrorHandler.normalize(err, task_id, task.instance_id)
 	if task.cancel_requested:
 		_finish(task, PythonBridgeResult.cancelled(task.id))
+		return
+	# Registry-Desync (z. B. nach Prozess-Neustart): einmalig mit Source
+	# wiederholen statt den Task endgueltig fehlschlagen zu lassen.
+	if str(err.get("type", "")) == "ScriptNotDefined" and not task._source_resent \
+			and task.source_hash != "" and _registry != null:
+		_registry.reset_context(instance_id, task.context_id)
+		task._source_resent = true
+		task._force_source = true
+		_resend_once(task, Time.get_ticks_msec())
 		return
 	if _should_retry(task, err):
 		_requeue(task, Time.get_ticks_msec())
@@ -351,9 +371,10 @@ func _build_batch(tasks: Array, instance_id: String) -> Dictionary:
 	}
 	_batch_seq += 1
 	var items: Array = msg[PythonProtocol.FIELD_ITEMS]
+	var seen_sources := {}
 	for t in tasks:
 		var task := t as PythonBridgeTask
-		items.append(_task_item(task))
+		items.append(_task_item(task, instance_id, seen_sources))
 		_queue.erase(task)
 	return {"kind": "batch", "tasks": tasks, "msg": msg, "instance_id": instance_id}
 
@@ -392,7 +413,18 @@ func _requeue(task: PythonBridgeTask, now_ms: int) -> void:
 	task.state = PythonBridgeTask.State.QUEUED
 	task.queued_at_ms = now_ms
 	task.started_at_ms = 0
+	task._source_sent = false
 	task._next_attempt_ms = now_ms + int(_cfg.get("retry_delay_ms", 250))
+	_insert_sorted(task)
+
+## Einmalige Wiederholung ohne Retry-Budget zu verbrauchen (ScriptRegistry-
+## Selbstheilung bei SCRIPT_NOT_DEFINED). Verbraucht keine Retries.
+func _resend_once(task: PythonBridgeTask, now_ms: int) -> void:
+	task.state = PythonBridgeTask.State.QUEUED
+	task.queued_at_ms = now_ms
+	task.started_at_ms = 0
+	task._source_sent = false
+	task._next_attempt_ms = 0
 	_insert_sorted(task)
 
 # ------------------------------------------------------------------ Internal
@@ -443,28 +475,56 @@ func _insert_sorted(task: PythonBridgeTask) -> void:
 			hi = mid - 1
 	_queue.insert(lo, task)
 
-func _build_task_msg(task: PythonBridgeTask) -> Dictionary:
+func _build_task_msg(task: PythonBridgeTask, instance_id: String) -> Dictionary:
 	var msg := {
 		"v": PythonProtocol.PROTOCOL_VERSION,
 		"type": PythonProtocol.MSG_TASK,
 		"id": task.id,
 		"command": task.command,
 		"context": task.context_id,
-		"source": task.source,
+		"source_hash": task.source_hash,
 		"timeout_ms": task.timeout_ms,
 	}
+	msg["source"] = task.source if _needs_source(task, instance_id) else ""
+	task._source_sent = msg["source"] != ""
 	msg["data"] = _task_data(task)
 	return msg
 
-func _task_item(task: PythonBridgeTask) -> Dictionary:
-	return {
+func _task_item(task: PythonBridgeTask, instance_id: String, seen: Dictionary = {}) -> Dictionary:
+	var needs_source := _needs_source(task, instance_id)
+	var item := {
 		"id": task.id,
 		"command": task.command,
 		"context": task.context_id,
-		"source": task.source,
+		"source_hash": task.source_hash,
 		"timeout_ms": task.timeout_ms,
-		"data": _task_data(task),
 	}
+	# In einem Batch darf je (context, hash) nur das erste Item den Source
+	# tragen; die Folge-Items referenzieren den Hash und laufen im selben
+	# Worker-Thread NACH dem definierenden Item (Reihenfolge bleibt).
+	if needs_source and task.source_hash != "":
+		var key := task.context_id + "|" + task.source_hash
+		if seen.has(key):
+			needs_source = false
+		else:
+			seen[key] = true
+	item["source"] = task.source if needs_source else ""
+	task._source_sent = needs_source
+	item["data"] = _task_data(task)
+	return item
+
+## Entscheidet, ob der Task im Dispatch den Inline-Source mitfuehren muss:
+##   - Temp-/Einmal-Code (source_hash leer) immer;
+##   - persistente Skripte nur, wenn die Ziel-Instanz den Hash laut Registry
+##     noch nicht kennt oder ein erzwungener Resend ansteht.
+func _needs_source(task: PythonBridgeTask, instance_id: String) -> bool:
+	if task.source_hash == "":
+		return true
+	if task._force_source:
+		return true
+	if _registry != null and _registry.is_defined(instance_id, task.context_id, task.source_hash):
+		return false
+	return true
 
 func _task_data(task: PythonBridgeTask) -> Dictionary:
 	var data: Dictionary = {}

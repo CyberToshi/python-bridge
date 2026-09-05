@@ -26,6 +26,11 @@ from . import protocol
 
 SYNTAX_FILENAME_PREFIX = "<bridge:"
 
+# Fehlercode, wenn ein Call ohne source ankommt, die Context-Version aber
+# nicht zum angegebenen source_hash passt (ScriptRegistry-Desync). Der
+# Client soll daraufhin die Quelle einmalig (neu) senden.
+SCRIPT_NOT_DEFINED = "ScriptNotDefined"
+
 # Default output caps (bytes). Godot uebergibt die konfigurierten Werte beim
 # Prozessstart (siehe bridge_instance.gd); diese Defaults gelten fuer den
 # Standalone-Betrieb und die Tests.
@@ -71,11 +76,21 @@ class _CappedWriter(io.TextIOBase):
 
 
 class ScriptContext:
-    __slots__ = ("namespace", "source_hash")
+    """Persistenter Kontext eines Skripts in einer Python-Instanz.
+
+    `namespace`   - ausgefuehrter Modul-Namespace (Funktionen, State)
+    `source_hash` - SHA-256 des zuletzt definierten Sources
+    `code`        - kompiliertes Code-Objekt des zuletzt definierten Sources
+                    (Compile-Cache: run() fuehrt es erneut aus statt neu zu
+                    kompilieren - A4)
+    """
+
+    __slots__ = ("namespace", "source_hash", "code")
 
     def __init__(self):
         self.namespace = {"__name__": "__pybridge__", "input": None}
         self.source_hash = None
+        self.code = None
 
 
 def _hash(source):
@@ -119,46 +134,112 @@ class ScriptHost:
             self.contexts[context_id] = ctx
         return ctx
 
-    # ------------------------------------------------------------------ API
-    def define(self, context_id, source):
-        """Compiles and executes `source` in the context. Returns (result,
-        error); result is None for define."""
-        ctx = self._context(context_id)
-        ns = ctx.namespace
+    def _compile(self, context_id, source):
+        """Compiles `source`. Returns (code, None) or (None, err); SyntaxError
+        wird strukturiert gemeldet."""
         try:
             code = compile(source, SYNTAX_FILENAME_PREFIX + context_id + ">", "exec")
+            return code, None
         except SyntaxError as exc:
             return None, _error("SyntaxError", exc)
+
+    def _prepare(self, ctx, context_id, source, source_hash):
+        """Stellt sicher, dass der Context den aktuellen Source enthaelt.
+
+        Kompiliert nur, wenn der Context den Hash noch nicht kennt (Compile-
+        Cache ueber ctx.code). Beim Kompilieren wird der Hash einmal gegen
+        den tatsaechlichen Source verifiziert (kostet nur bei Aenderung,
+        nie auf dem heissen Pfad) - ein falscher Client-Hash kann so keine
+        stillschweigend falsche Code-Version erzeugen.
+        """
+        if ctx.source_hash == source_hash and ctx.code is not None:
+            return ctx.code, None
+        actual = _hash(source)
+        if source_hash and actual != source_hash:
+            return None, _error(
+                "ProtocolError",
+                "Source hash mismatch: client sent %s, computed %s"
+                % (source_hash[:12], actual[:12]),
+                code=protocol.CATEGORY_PROTOCOL_ERROR)
+        code, err = self._compile(context_id, source)
+        if err is not None:
+            return None, err
+        ctx.code = code
+        ctx.source_hash = actual
+        return code, None
+
+    def _not_defined_error(self, context_id, source_hash):
+        return _error(
+            "ScriptNotDefined",
+            "Context '%s' is not defined with source hash %s - resend the source"
+            % (context_id, (source_hash or "")[:12]),
+            code=protocol.CATEGORY_TASK_ERROR)
+
+    # ------------------------------------------------------------------ API
+    def define(self, context_id, source, source_hash=None):
+        """Compiles and executes `source` in the context. Returns (result,
+        error); result is None for define. `source_hash` ist der vom Client
+        berechnete SHA-256; fehlt er, wird er hier bestimmt.
+
+        Ohne inline source (ScriptRegistry: Context ist bereits mit diesem
+        Hash definiert) ist define ein No-Op."""
+        if source_hash is None:
+            source_hash = _hash(source) if source else ""
+        ctx = self._context(context_id)
+        if not source:
+            if ctx.source_hash == source_hash and ctx.code is not None:
+                return None, None
+            return None, self._not_defined_error(context_id, source_hash)
+        ns = ctx.namespace
+        code, err = self._prepare(ctx, context_id, source, source_hash)
+        if err is not None:
+            return None, err
         try:
             exec(code, ns)
         except Exception as exc:  # noqa: BLE001 - Nutzer-Code, strukturiert melden
             return None, _error(type(exc).__name__, exc)
-        ctx.source_hash = _hash(source)
         return None, None
 
-    def run(self, context_id, source, input_data):
-        """Führt source aus (input/result-Konvention), immer frisch."""
+    def run(self, context_id, source, input_data, source_hash=None):
+        """Führt source aus (input/result-Konvention). Bei unveraendertem
+        Source wird das kompilierte Code-Objekt wiederverwendet (kein
+        erneutes compile()); ohne source wird nur ausgefuehrt, wenn die
+        Context-Version zum source_hash passt."""
         ctx = self._context(context_id)
         ns = ctx.namespace
+        if source_hash is None:
+            source_hash = _hash(source)
+        if not source:
+            if ctx.source_hash != source_hash or ctx.code is None:
+                return None, self._not_defined_error(context_id, source_hash)
+            code = ctx.code
+        else:
+            code, err = self._prepare(ctx, context_id, source, source_hash)
+            if err is not None:
+                return None, err
         ns["input"] = input_data
-        try:
-            code = compile(source, SYNTAX_FILENAME_PREFIX + context_id + ">", "exec")
-        except SyntaxError as exc:
-            return None, _error("SyntaxError", exc)
         try:
             exec(code, ns)
         except Exception as exc:  # noqa: BLE001
             return None, _error(type(exc).__name__, exc)
-        ctx.source_hash = _hash(source)
         return ns.get("result"), None
 
-    def call(self, context_id, source, function, args, kwargs):
-        """Definiert nur bei geändertem Source neu, ruft dann die Funktion."""
+    def call(self, context_id, source, function, args, kwargs, source_hash=None):
+        """Ruft eine Funktion im Context auf. Enthaelt die Nachricht einen
+        source, wird nur bei veraendertem Hash neu definiert. Ohne source
+        wird direkt aufgerufen, wenn die Context-Version zum source_hash
+        passt (ScriptRegistry); sonst SCRIPT_NOT_DEFINED."""
         ctx = self._context(context_id)
-        if ctx.source_hash != _hash(source):
-            _, err = self.define(context_id, source)
-            if err is not None:
-                return None, err
+        if source_hash is None:
+            source_hash = _hash(source) if source else ""
+        if source:
+            if ctx.source_hash != source_hash:
+                _, err = self.define(context_id, source, source_hash)
+                if err is not None:
+                    return None, err
+        else:
+            if ctx.source_hash != source_hash or ctx.code is None:
+                return None, self._not_defined_error(context_id, source_hash)
         ns = ctx.namespace
         fn = ns.get(function)
         if fn is None:
@@ -176,6 +257,7 @@ class ScriptHost:
         hot reload; other contexts and the process stay alive."""
         ctx = self._context(context_id)
         ctx.source_hash = None
+        ctx.code = None
         return self.define(context_id, source)
 
     # ------------------------------------------------------------------ Jobs
@@ -197,6 +279,7 @@ class ScriptHost:
         command = message.get("command", protocol.CMD_RUN)
         context_id = str(message.get("context", "anon"))
         source = str(message.get("source", ""))
+        source_hash = message.get("source_hash")
         data = message.get("data") or {}
 
         stdout_buf, stderr_buf = _CappedWriter(self.max_stdout_bytes), \
@@ -209,13 +292,15 @@ class ScriptHost:
                     kwargs = {k: serializer.decode_obj(v, [])
                               for k, v in (data.get("kwargs") or {}).items()}
                     result, err = self.call(
-                        context_id, source, str(message.get("function", "")), args, kwargs)
+                        context_id, source, str(message.get("function", "")), args, kwargs,
+                        source_hash=source_hash)
                 elif command == protocol.CMD_DEFINE:
-                    result, err = self.define(context_id, source)
+                    result, err = self.define(context_id, source, source_hash=source_hash)
                 else:  # CMD_RUN
                     from . import serializer
                     input_data = serializer.decode_obj(data.get("input"), [])
-                    result, err = self.run(context_id, source, input_data)
+                    result, err = self.run(
+                        context_id, source, input_data, source_hash=source_hash)
         except Exception as exc:  # noqa: BLE001 - Infrastruktur-Fehler
             result, err = None, _error(type(exc).__name__, exc)
 

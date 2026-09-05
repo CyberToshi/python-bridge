@@ -24,6 +24,7 @@ var _instances: Dictionary = {}           # name -> BridgeInstance
 var _settings: Dictionary = {}            # initialized in _init (runtime, after class cache is ready)
 var _task_manager: PythonBridgeTaskManager = null
 var _scheduler: PythonBridgeScheduler = null
+var _script_registry: PythonBridgeScriptRegistry = null
 var _task_seq: int = 0
 var _context_seq: int = 0
 var _shutting_down: bool = false
@@ -48,7 +49,9 @@ func _process(_delta: float) -> void:
 	poll()
 
 func _init_task_layer() -> void:
+	_script_registry = PythonBridgeScriptRegistry.new()
 	_task_manager = PythonBridgeTaskManager.new(_settings)
+	_task_manager.attach_registry(_script_registry)
 	_scheduler = PythonBridgeScheduler.new(_settings)
 	_scheduler.setup(
 		_task_manager,
@@ -161,6 +164,11 @@ func shutdown_now() -> void:
 	_shutting_down = false
 
 func _on_instance_state(instance: String, state: String) -> void:
+	# Sobald ein Python-Prozess endet, sind alle seine Context-Compile-Caches
+	# weg: Registry-Bestaetigungen verwerfen, damit der naechste Call den
+	# Source wieder mitschickt und den Context sauber neu aufbaut.
+	if state in ["stopped", "crashed", "error", "restarting"]:
+		_script_registry.reset_instance(instance)
 	instance_state_changed.emit(instance, state)
 
 func _on_instance_message(instance: String, parsed: Dictionary) -> void:
@@ -180,7 +188,9 @@ func _on_instance_message(instance: String, parsed: Dictionary) -> void:
 
 func _on_instance_lost(instance: String, error: Dictionary) -> void:
 	# Crash: In-Flight-Tasks fehlschlagen lassen; Instanz restartet selbst
-	# per Backoff-Policy.
+	# per Backoff-Policy. Registry-Bestaetigungen des Prozesses sind damit
+	# ungueltig (der neue Prozess startet mit leeren Contexts).
+	_script_registry.reset_instance(instance)
 	_scheduler.on_instance_lost(instance, error)
 
 func _on_bridge_event(instance: String, event: Dictionary) -> void:
@@ -261,46 +271,62 @@ func create_script(script_id: String, code: String, subfolder := "") -> PythonBr
 			"Cannot open file for writing: " + path))
 	file.store_string(code)
 	file.close()
+	# Registry-Cache verwerfen, damit der naechste Lesezugriff den neuen
+	# Inhalt sieht (mtime-Granularitaet ist sonst nicht zuverlaessig).
+	_script_registry.forget(path)
 	return PythonBridgeResult.success({"path": path})
 
 func get_script_source(script_id: String) -> String:
+	var entry := _script_entry(script_id)
+	return str(entry.get("source", ""))
+
+## Liest Skript ueber die Registry (mtime/size-Cache). Liefert
+## {source, hash, mtime, size} oder {} wenn nicht vorhanden.
+func _script_entry(script_id: String) -> Dictionary:
 	var path := resolve_script_path(script_id)
 	if not FileAccess.file_exists(path):
-		return ""
-	var file := FileAccess.open(path, FileAccess.READ)
-	var src := file.get_as_text()
-	file.close()
-	return src
+		_script_registry.forget(path)
+		return {}
+	return _script_registry.entry_for(path)
 
 func execute_script(script_id: String, input: Variant = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
-	var src := get_script_source(script_id)
-	if src == "":
+	var entry := _script_entry(script_id)
+	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
 			"Script not found: " + script_id))
-	var task := PythonBridgeTask.make_run(_next_task_id(), "script:" + script_id, src, input,
+	var task := PythonBridgeTask.make_run(_next_task_id(), _script_context(script_id), entry.source, input,
 		int(timeout_sec * 1000.0))
+	task.source_hash = entry.hash
 	return await _submit_and_await(task, instance)
 
 func call_script(script_id: String, function: String, args: Array = [], kwargs: Dictionary = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
-	var src := get_script_source(script_id)
-	if src == "":
+	var entry := _script_entry(script_id)
+	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
 			"Script not found: " + script_id))
-	var task := PythonBridgeTask.make_call(_next_task_id(), "script:" + script_id, src,
+	var task := PythonBridgeTask.make_call(_next_task_id(), _script_context(script_id), entry.source,
 		function, args, kwargs, int(timeout_sec * 1000.0))
+	task.source_hash = entry.hash
 	return await _submit_and_await(task, instance)
 
 func define_script(script_id: String, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
-	var src := get_script_source(script_id)
-	if src == "":
+	var entry := _script_entry(script_id)
+	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
 			"Script not found: " + script_id))
-	var task := PythonBridgeTask.make_define(_next_task_id(), "script:" + script_id, src,
+	var task := PythonBridgeTask.make_define(_next_task_id(), _script_context(script_id), entry.source,
 		int(timeout_sec * 1000.0))
+	task.source_hash = entry.hash
 	return await _submit_and_await(task, instance)
+
+## Kanonischer Context-Name eines persistenten Skripts. Wird von calls,
+## execute, define UND hot reload identisch verwendet, damit der Python-
+## Server genau den Context invalidiert, den die Calls nutzen.
+func _script_context(script_id: String) -> String:
+	return "script:" + resolve_script_path(script_id)
 
 func _submit_and_await(task: PythonBridgeTask, instance: String) -> PythonBridgeResult:
 	var res := _submit_task_with_instance(task, instance)
@@ -340,21 +366,28 @@ func hot_reload_script(script_id: String) -> PythonBridgeResult:
 	var mode := str(_settings.get("hot_reload_mode", "reload_context"))
 	if mode == "none":
 		return PythonBridgeResult.success({"reloaded": false, "mode": "none"})
-	var src := get_script_source(script_id)
-	if src == "":
+	# Immer frisch von der Platte lesen (nicht aus dem mtime-Cache), damit
+	# der Reload garantiert den aktuellsten Stand definiert.
+	var entry := _script_registry.refresh(resolve_script_path(script_id))
+	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
 			"Script not found: " + script_id))
-	var context := "script:" + resolve_script_path(script_id)
+	var src: String = entry.source
+	var context := _script_context(script_id)
 	if mode == "restart_instance":
 		for name in _instances.keys():
 			var inst := _get_instance_by_name(name)
 			if inst and inst.is_active():
 				inst.stop()
 				inst.start()
+		# Prozess-Neustart: Registry-Bestaetigungen werden ueber die
+		# State-Transition (stopped) bereits verworfen.
 		return PythonBridgeResult.success({"reloaded": true, "mode": mode})
-	# reload_context: Server invalidiert den Kontext-Hash; der naechste Call
-	# re-definiert die Quelle (siehe Python executor.py).
+	# reload_context: Server invalidiert den Kontext-Hash und definiert die
+	# neue Quelle sofort. Da der Server-Hash danach NICHT mehr dem entspricht,
+	# den Godot bestaetigt hat, werden die Bestaetigungen hier verworfen:
+	# der naechste Call traegt den Source wieder (genau eine Neudefinition).
 	var msg := {
 		"v": PythonProtocol.PROTOCOL_VERSION,
 		"type": PythonProtocol.MSG_RELOAD,
@@ -368,6 +401,7 @@ func hot_reload_script(script_id: String) -> PythonBridgeResult:
 		if inst and inst.is_ready():
 			if inst.send_message(msg) == OK:
 				sent = true
+	_script_registry.reset_context_all(context)
 	return PythonBridgeResult.success({"reloaded": sent, "mode": mode})
 
 # ------------------------------------------------------------------ Introspection

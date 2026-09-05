@@ -200,3 +200,120 @@ func test_fail_in_flight_on_crash() -> void:
 		PythonBridgeErrorHandler.CATEGORY_CONNECTION_ERROR, "connection lost", "", "inst")
 	tm.fail_in_flight("inst", err, 0)
 	assert_eq(t.state, PythonBridgeTask.State.QUEUED, "retryable crash requeues")
+
+# ------------------------------------------------------------ ScriptRegistry
+func _registry_cfg() -> Dictionary:
+	var cfg := _cfg()
+	cfg["max_batch_size"] = 0   # disable batching: deterministic single units
+	return cfg
+
+func _attach_tm() -> Dictionary:
+	var reg := PythonBridgeScriptRegistry.new()
+	var tm := PythonBridgeTaskManager.new(_registry_cfg())
+	tm.attach_registry(reg)
+	return {"tm": tm, "reg": reg}
+
+func test_registry_sends_source_until_defined() -> void:
+	var ctx: Dictionary = _attach_tm()
+	var tm: PythonBridgeTaskManager = ctx["tm"]
+	var t := PythonBridgeTask.make_call("d1", "ctxA", "def f(): return 1", "f", [], {}, 1000)
+	t.source_hash = t.source.sha256_text()
+	tm.submit(t, 0)
+	# First dispatch: instance does not know the hash yet -> source travels.
+	var unit := tm.next_unit("inst", 0)
+	assert_eq(unit["kind"], "single")
+	assert_eq(unit["msg"]["source"], t.source)
+	assert_eq(unit["msg"]["source_hash"], t.source_hash)
+
+func test_registry_drops_source_once_defined() -> void:
+	var ctx: Dictionary = _attach_tm()
+	var tm: PythonBridgeTaskManager = ctx["tm"]
+	var reg: PythonBridgeScriptRegistry = ctx["reg"]
+	reg.confirm("inst", "ctxB", "hash123")
+	var t := PythonBridgeTask.make_call("d2", "ctxB", "def f(): return 2", "f", [], {}, 1000)
+	t.source_hash = "hash123"
+	tm.submit(t, 0)
+	var unit := tm.next_unit("inst", 0)
+	assert_eq(unit["kind"], "single")
+	assert_eq(unit["msg"]["source"], "", "defined context is referenced by hash only")
+	assert_eq(unit["msg"]["source_hash"], "hash123")
+
+func test_ok_result_confirms_registry() -> void:
+	var ctx: Dictionary = _attach_tm()
+	var tm: PythonBridgeTaskManager = ctx["tm"]
+	var reg: PythonBridgeScriptRegistry = ctx["reg"]
+	var t := PythonBridgeTask.make_call("d3", "ctxC", "def f(): return 3", "f", [], {}, 1000)
+	t.source_hash = t.source.sha256_text()
+	tm.submit(t, 0)
+	var unit := tm.next_unit("inst", 0)
+	assert_eq(unit["msg"]["source"], t.source)
+	tm.mark_unit_running("inst", unit, 0)
+	tm.resolve_result("inst", {
+		"msg": {"type": PythonProtocol.MSG_TASK_RESULT, "id": t.id, "status": "ok", "data": 3},
+	})
+	assert_eq(t.state, PythonBridgeTask.State.COMPLETED)
+	assert_true(reg.is_defined("inst", "ctxC", t.source_hash),
+		"ok result with source confirms the instance/context/hash")
+	# Follow-up call on the same instance now goes hash-only.
+	var t2 := PythonBridgeTask.make_call("d4", "ctxC", t.source, "f", [], {}, 1000)
+	t2.source_hash = t.source_hash
+	tm.submit(t2, 0)
+	var unit2 := tm.next_unit("inst", 0)
+	assert_eq(unit2["msg"]["source"], "")
+
+func test_reset_instance_forces_source_again() -> void:
+	var ctx: Dictionary = _attach_tm()
+	var tm: PythonBridgeTaskManager = ctx["tm"]
+	var reg: PythonBridgeScriptRegistry = ctx["reg"]
+	reg.confirm("inst", "ctxD", "h1")
+	# Process restart (or crash): all confirmations of the instance are gone.
+	reg.reset_instance("inst")
+	var t := PythonBridgeTask.make_call("d5", "ctxD", "def f(): return 5", "f", [], {}, 1000)
+	t.source_hash = "h1"
+	tm.submit(t, 0)
+	var unit := tm.next_unit("inst", 0)
+	assert_eq(unit["msg"]["source"], t.source,
+		"reset instance -> next dispatch carries the source again")
+
+func test_script_not_defined_self_heals_once() -> void:
+	var ctx: Dictionary = _attach_tm()
+	var tm: PythonBridgeTaskManager = ctx["tm"]
+	var t := PythonBridgeTask.make_call("d6", "ctxE", "def f(): return 6", "f", [], {}, 1000)
+	t.source_hash = t.source.sha256_text()
+	tm.submit(t, 0)
+	var unit := tm.next_unit("inst", 0)
+	tm.mark_unit_running("inst", unit, 0)
+	var retries_before := t.retries_left
+	# Server lost the context (restart race): answers SCRIPT_NOT_DEFINED.
+	tm.resolve_result("inst", {
+		"msg": {"type": PythonProtocol.MSG_TASK_ERROR, "id": t.id, "status": "error",
+			"error": {"code": PythonBridgeErrorHandler.CATEGORY_TASK_ERROR,
+				"type": "ScriptNotDefined", "message": "context lost"}},
+	})
+	assert_eq(t.state, PythonBridgeTask.State.QUEUED, "heal resend requeues")
+	assert_eq(t.retries_left, retries_before, "heal does not consume a retry")
+	# The resent unit carries the source (forced), so the server can rebuild.
+	var unit2 := tm.next_unit("inst", 0)
+	assert_eq(unit2["kind"], "single")
+	assert_eq(unit2["msg"]["source"], t.source)
+	tm.mark_unit_running("inst", unit2, 0)
+	tm.resolve_result("inst", {
+		"msg": {"type": PythonProtocol.MSG_TASK_RESULT, "id": t.id, "status": "ok", "data": 6},
+	})
+	assert_eq(t.state, PythonBridgeTask.State.COMPLETED)
+	assert_true((ctx["reg"] as PythonBridgeScriptRegistry).is_defined(
+		"inst", "ctxE", t.source_hash))
+
+func test_temp_code_always_carries_source() -> void:
+	var ctx: Dictionary = _attach_tm()
+	var tm: PythonBridgeTaskManager = ctx["tm"]
+	# Temp code has no hash -> must always travel inline, never suppressed.
+	tm.submit(PythonBridgeTask.make_call("d7", "ctxT", "def g(): return 1", "g", [], {}, 1000), 0)
+	var unit := tm.next_unit("inst", 0)
+	assert_eq(unit["kind"], "single")
+	assert_eq(unit["msg"]["source"], "def g(): return 1")
+	# A (no-op) confirm with an empty hash must not suppress the source either.
+	(ctx["reg"] as PythonBridgeScriptRegistry).confirm("inst", "ctxT", "")
+	tm.submit(PythonBridgeTask.make_call("d8", "ctxT", "def g(): return 1", "g", [], {}, 1000), 0)
+	var unit2 := tm.next_unit("inst", 0)
+	assert_eq(unit2["msg"]["source"], "def g(): return 1")
