@@ -52,11 +52,25 @@ def fibonacci(n: int) -> list:
 
 Zwei Wege, die Datei anzulegen:
 
-- **Im Editor-Dock** (empfohlen): Rechts oben das „Python Bridge“-Panel
-  öffnen → **New script** → Namen eingeben → Code schreiben → **Save**.
-  Das Dock zeigt die Skripte aus `res://python_bridge/scripts/` automatisch.
+- **Im Editor-Dock** (empfohlen): Rechts den vertikalen Tab
+  **„Python Bridge“** anklicken (rechter Dock-Streifen, oberer Slot,
+  neben dem FileSystem-Tab — genaue Klick-Anleitung:
+  `docs/INSTALLATION.md`, Schritt 2–3) → **New script** → Namen eingeben
+  → Code schreiben → **Save**. Das Dock zeigt die Skripte aus
+  `res://python_bridge/scripts/` automatisch.
 - **Von Hand**: Datei im Dateisystem anlegen; das Dock erkennt sie über den
   mtime-Watcher automatisch.
+
+Die Buttons im Dock im Überblick:
+
+| Button | Wirkung |
+|---|---|
+| **Refresh** | Skriptliste neu einlesen |
+| **New script** | Neue `.py`-Datei im Workspace anlegen |
+| **Save** | Aktuell geöffneten Code speichern |
+| **Run** | Datei sofort ausführen (`execute_script`), Ausgabe im Log |
+| **Generate wrapper** | GDScript-Klasse für das Skript erzeugen (siehe Abschnitt 5) |
+| **Hot reload** | Geänderten Code ohne Neustart neu laden |
 
 ---
 
@@ -237,15 +251,24 @@ verifiziert den Import.
 ## 10. Typischer Ablauf auf einen Blick
 
 ```
-1. Plugin in project.godot aktiviert (editor_plugins.enabled) ✓
-2. Autoload "PythonBridge" registriert ✓
-3. Python-Datei schreiben   →  res://python_bridge/scripts/mein_skript.py
-4. (optional) Wrapper generieren über das Editor-Dock
-5. In GDScript:  await PythonBridge.start_instance("default")
-6. Aufrufen:     await PythonBridge.call_script("mein_skript", "fn", [args])
-   oder:         await MeinSkript.new().fn(args)
-7. Ergebnis ist ein PythonBridgeResult → .is_ok() / .value / .error_message()
+1. Addon kopieren:            addons/python_bridge/  →  res://addons/python_bridge/
+2. Plugin aktivieren:         Projekt → Projekteinstellungen → Plugins
+                              → "Python Bridge" aktivieren
+                              (registriert Autoload "PythonBridge" + Dock)
+3. Dock öffnen:               rechter Dock-Streifen, vertikaler Tab
+                              "Python Bridge" (neben FileSystem)
+4. Python-Datei schreiben:    im Dock: New script → Code → Save
+                              → res://python_bridge/scripts/mein_skript.py
+5. (optional) Wrapper:        im Dock: Skript wählen → Generate wrapper
+6. In GDScript:               await PythonBridge.start_instance("default")
+7. Aufrufen:                  await PythonBridge.call_script("mein_skript", "fn", [args])
+   oder:                      await MeinSkript.new().fn(args)
+8. Ergebnis ist ein PythonBridgeResult → .is_ok() / .value / .error_message()
 ```
+
+Die Schritte 1–3 im Detail (mit Editor-Menus und Dock-Anatomie):
+`docs/INSTALLATION.md`. Beide Seiten komplett als Copy-Paste-Code:
+`docs/HANDS_ON_CONNECT_GUIDE.md`.
 
 Mehr Details zu jedem Baustein: `docs/API.md`, `docs/ARCHITEKTUR.md`,
 `docs/PythonBridge_Dokumentation.pdf` und die lauffähige Demo-Szene

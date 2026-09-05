@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Dokumentation & Editor-UX
+
+- **Dock-Tab umbenannt**: Der Tab hieß zuvor „PythonBridgePanel“ (interner
+  Node-Name) und war dadurch schwer zu finden — er zeigt jetzt
+  **„Python Bridge“**.
+- **Installations-Doku ausgebaut** (`docs/INSTALLATION.md`): vollständige
+  Klick-für-Klick-Anleitung von der Plugin-Aktivierung über das Auffinden
+  des Docks (mit ASCII-Diagramm) bis zur ersten Python-Datei — auch für
+  Godot-Neulinge nachvollziehbar.
+- **Praxis-Doku ergänzt** (`docs/PRAXIS.md`): Button-Übersicht des Docks
+  und Workflow-Checkliste mit allen Editor-Schritten.
+
 ## v0.2.1 (current)
 
 ### Neu: Demo-Szene & Dokumentations-PDF
