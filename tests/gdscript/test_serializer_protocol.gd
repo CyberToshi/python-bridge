@@ -122,6 +122,101 @@ func test_ndarray_nbytes_validation() -> void:
 	assert_true(back is PackedFloat32Array)
 	assert_eq((back as PackedFloat32Array).size(), 0)
 
+func _write_test_file(path: String, data: PackedByteArray) -> void:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(data)
+	f.close()
+
+func _sha256_of(data: PackedByteArray) -> String:
+	var h := HashingContext.new()
+	h.start(HashingContext.HASH_SHA256)
+	h.update(data)
+	return h.finish().hex_encode()
+
+func test_file_read_chunked_roundtrip() -> void:
+	var path := "user://pb_test_data.bin"
+	var raw := PackedByteArray()
+	for i in 64:
+		raw.append_array(PackedByteArray([0]))
+	# 64 float32 = 256 bytes
+	var floats := PackedFloat32Array()
+	floats.resize(64)
+	for i in 64:
+		floats[i] = float(i) * 0.25
+	var bytes := PackedByteArray()
+	bytes.resize(64 * 4)
+	for i in 64:
+		bytes.encode_float(i * 4, floats[i])
+	_write_test_file(path, bytes)
+	var sha := _sha256_of(bytes)
+	var res: Dictionary = await PythonBridgeDataFile.read_chunked(path, 1024 * 1024, 256, sha)
+	assert_true(bool(res["ok"]))
+	assert_eq((res["data"] as PackedByteArray).size(), 256)
+	var decoded: Variant = PythonBridgeDataFile.decode_bytes(res["data"], "float32", [64])
+	assert_true(decoded is PackedFloat32Array)
+	assert_eq((decoded as PackedFloat32Array)[10], 2.5)
+	assert_eq((decoded as PackedFloat32Array)[63], 15.75)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_file_read_rejects_size_mismatch() -> void:
+	var path := "user://pb_test_bad_size.bin"
+	_write_test_file(path, PackedByteArray([1, 2, 3, 4]))
+	var res: Dictionary = await PythonBridgeDataFile.read_chunked(path, 1024, 999, "")
+	assert_false(bool(res["ok"]))
+	assert_true(str(res["error"]).contains("size"))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_file_read_rejects_checksum_mismatch() -> void:
+	var path := "user://pb_test_bad_sha.bin"
+	_write_test_file(path, PackedByteArray([1, 2, 3, 4]))
+	var res: Dictionary = await PythonBridgeDataFile.read_chunked(
+		path, 1024, 4, "deadbeef")
+	assert_false(bool(res["ok"]))
+	assert_true(str(res["error"]).contains("checksum"))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_facade_materialize_file_path() -> void:
+	var bridge := PB_Facade.new()
+	var path := "user://pb_test_facade.bin"
+	var floats := PackedFloat32Array()
+	floats.resize(32)
+	for i in 32:
+		floats[i] = float(i)
+	var bytes := PackedByteArray()
+	bytes.resize(32 * 4)
+	for i in 32:
+		bytes.encode_float(i * 4, floats[i])
+	_write_test_file(path, bytes)
+	var desc := {
+		"transport": "file",
+		"path": ProjectSettings.globalize_path(path),
+		"nbytes": 128,
+		"dtype": "float32",
+		"shape": [32],
+		"sha256": _sha256_of(bytes),
+	}
+	var res: PythonBridgeResult = await bridge._materialize_file(desc)
+	assert_true(res.is_ok(), str(res.error_message()))
+	assert_true(res.value is PackedFloat32Array)
+	assert_eq((res.value as PackedFloat32Array)[31], 31.0)
+	bridge.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func test_facade_materialize_file_error_propagates() -> void:
+	var bridge := PB_Facade.new()
+	var desc := {
+		"transport": "file",
+		"path": "/nonexistent/pb_data.bin",
+		"nbytes": 16,
+		"dtype": "float32",
+		"shape": [4],
+		"sha256": "",
+	}
+	var res: PythonBridgeResult = await bridge._materialize_file(desc)
+	assert_true(res.is_error())
+	assert_eq(res.error_code(), PythonBridgeErrorHandler.CATEGORY_SERIALIZATION_ERROR)
+	bridge.free()
+
 func test_binary_frame_roundtrip() -> void:
 	var chunks: Array = []
 	var big := PackedByteArray()

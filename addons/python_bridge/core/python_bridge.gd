@@ -530,13 +530,39 @@ func materialize_data(ref: PythonBridgeDataRef, timeout_sec := 60.0) -> PythonBr
 		"type": PythonProtocol.MSG_DATA_GET,
 		"id": rid,
 		"ref_id": ref.data_id,
+		"want": "file", # Phase 4: Datei-Transport bevorzugen (transparenter Fallback)
 	}
 	var pending := await _data_request_wait(inst, msg, timeout_sec)
 	if str(pending.get("status", "error")) == "ok":
-		return PythonBridgeResult.success(pending.get("data", null))
+		var data: Variant = pending.get("data", null)
+		# Datei-Modus: statt der Rohdaten kam ein Datei-Descriptor - die Daten
+		# werden chunkweise per FileAccess gelesen (kein WebSocket-Transfer).
+		if data is Dictionary and str((data as Dictionary).get("transport", "")) == "file":
+			return await _materialize_file(data as Dictionary)
+		return PythonBridgeResult.success(data)
 	var err: Dictionary = pending.get("error", {})
 	err = PythonBridgeErrorHandler.normalize(err, ref.data_id, ref.instance_name)
 	return PythonBridgeResult.failed_with_error(err, ref.data_id, ref.instance_name)
+
+## Liest eine file-backed DataRef chunkweise (Frame-Budget) und dekodiert sie
+## in den Zieltyp. Fehler (fehlende/korrupte Datei, Pruefsumme) werden
+## strukturiert gemeldet.
+func _materialize_file(desc: Dictionary) -> PythonBridgeResult:
+	var budget := int(_settings.get("file_read_bytes_per_frame", 16 * 1024 * 1024))
+	var res := await PythonBridgeDataFile.read_chunked(
+		str(desc.get("path", "")),
+		budget,
+		int(desc.get("nbytes", 0)),
+		str(desc.get("sha256", "")))
+	if not bool(res.get("ok", false)):
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_SERIALIZATION_ERROR,
+			str(res.get("error", "File materialization failed"))))
+	var value := PythonBridgeDataFile.decode_bytes(
+		res.get("data", PackedByteArray()),
+		str(desc.get("dtype", "float64")),
+		desc.get("shape", []))
+	return PythonBridgeResult.success(value)
 
 ## Gibt die vom Handle referenzierten Daten im Python-Prozess frei (Speicher).
 ## Der Handle wird als stale markiert; weitere materialize_data-Aufrufe

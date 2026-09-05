@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Phase 4 — Datei-basierte grosse Daten (Commit `5aa94f9`)
+
+- **File-backed DataRefs**: Der Python-`DataStore` schreibt grosse Handles
+  als Datei ins Instanz-Tmpdir (`res://python_bridge/tmp/data/`,
+  Dateinamen pro Instanz-Tag, sha256-Summe im Deskriptor) statt sie im
+  Prozess-Speicher zu halten.
+- **Kein WebSocket-Transfer mehr fuer grosse Daten**: `data_get` mit
+  `want="file"` liefert nur Pfad/Größe/Hash; Godot liest die Datei mit
+  dem neuen `PythonBridgeDataFile` chunkweise per `FileAccess`
+  (frame-budgetiert ueber `file_read_bytes_per_frame`, sha256-Verifikation,
+  transparenter Fallback auf Binary-Chunk-Transport ohne Tmpdir).
+- **Cleanup**: Release/Verbindungsende loeschen die Datei; Orphan-Cleanup
+  je Instanz-Tag beim naechsten Serverstart.
+- **Encoding in den Worker-Thread verschoben**: Result-Encoding (inkl.
+  File-Write/Hash) laeuft im Job-Thread, nicht im asyncio-Loop.
+- **Tests**: Python 83 (inkl. File-Transport-Integration, Release-loescht-
+  Datei, Connection-Cleanup, Fallback), GDScript 60 (inkl. `DataFile`
+  Chunk-Reader + sha256-Verifikation + Facade-File-Branch).
+
 ### Dokumentation & Editor-UX
 
 - **Dock-Tab umbenannt**: Der Tab hieß zuvor „PythonBridgePanel“ (interner

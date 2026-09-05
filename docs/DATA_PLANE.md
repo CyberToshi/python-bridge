@@ -1,15 +1,16 @@
 # Data Plane — grosse Daten & DataRef-Handles
 
 Dieses Dokument beschreibt die **implementierte** Data-Plane der Bridge
-(Phase 2, Stand der Commits `f625c7b`–`2c5fbc5`): wie grosse numerische
-Daten transportiert werden, wann die Bridge automatisch ein Handle statt der
-rohen Daten liefert und wie der Godot-Main-Thread geschuetzt bleibt.
+(Phase 2 + Phase 4, Stand der Commits `f625c7b`–`da50035`): wie grosse
+numerische Daten transportiert werden, wann die Bridge automatisch ein Handle
+statt der rohen Daten liefert und wie der Godot-Main-Thread geschuetzt bleibt.
 
 ```text
 kleine strukturierte Daten            -> JSON im Header
 grosse numerische Godot-Arrays        -> Little-Endian-Binary-Chunks
 grosse numpy-Ergebnisse aus Python    -> automatisch DataRef-Handle
-                                        (Materialisierung auf Anfrage)
+                                        (Materialisierung auf Anfrage,
+                                         ab Phase 4 Datei-basiert)
 ```
 
 ---
@@ -21,7 +22,7 @@ grosse numpy-Ergebnisse aus Python    -> automatisch DataRef-Handle
 | `PackedFloat32Array`/`Float64`/`Int32`/`Int64` (Godot → Python), groesser als 512 Bytes | Little-Endian-Rohbytes als Binary-Chunk mit `nbytes`-Descriptor; kommt in Python mit NumPy als `numpy.ndarray` an (ohne NumPy: raw `bytes`) |
 | Dieselben Arrays, klein | JSON-Zahlenliste (unveraendert, rueckwaertskompatibel) |
 | numpy-Ergebnis aus Python, kleiner als `data_ref_threshold_bytes` | direkter Binary-Chunk-Transfer, Ergebnis ist ein normales typisiertes Array |
-| numpy-Ergebnis >= `data_ref_threshold_bytes` (Default 16 MiB) | Python behaelt die Daten; Godot erhaelt ein `PythonBridgeDataRef`-Handle |
+| numpy-Ergebnis >= `data_ref_threshold_bytes` (Default 16 MiB) | Python behaelt die Daten; Godot erhaelt ein `PythonBridgeDataRef`-Handle. Die Daten liegen dabei ab Phase 4 als Datei im Instanz-Tmpdir (`res://python_bridge/tmp/data/data-<tag>-<id>.bin`, sha256-Summe im Deskriptor) statt im Prozess-Speicher |
 | Bytes-/Blob-Ergebnisse | Binary-Chunk (unveraendert) |
 
 Die Schwelle gilt nur fuer **eindimensionale Top-Level-numpy-Ergebnisse**
@@ -33,7 +34,8 @@ Konfiguration (Facade `configure()` bzw. `project.godot`-Defaults):
 ```gdscript
 {
     "data_ref_threshold_bytes": 16 * 1024 * 1024,  # 0 = DataRefs aus
-    "max_decode_bytes_per_frame": 16 * 1024 * 1024,
+    "max_decode_bytes_per_frame": 16 * 1024 * 1024,  # Entpack-Budget/Fram
+    "file_read_bytes_per_frame": 16 * 1024 * 1024,   # Datei-Lese-Budget/Fram
 }
 ```
 
@@ -79,6 +81,31 @@ if data.is_ok():
 var rel: PythonBridgeResult = await PythonBridge.release_data(ref)
 ```
 
+## 2b. Datei-basierte Materialisierung (Phase 4)
+
+Seit Phase 4 schreibt der Python-`DataStore` grosse Handles als **Datei**
+unter `res://python_bridge/tmp/data/data-<tag>-<id>.bin` (Tag = Instanzname,
+damit parallele Instanzen getrennte Dateien nutzen). Bei `materialize_data`
+fordert Godot `want="file"` an; der Server antwortet dann nur noch mit
+**Pfad + Größe + sha256-Summe** — die Daten selbst verlassen den
+Python-Prozess nie ueber den WebSocket.
+
+Godot liest die Datei mit `PythonBridgeDataFile.read_chunked()` chunkweise
+per `FileAccess` (max. `file_read_bytes_per_frame` Bytes pro Frame, damit
+kein Main-Thread-Stall entsteht), verifiziert die sha256-Summe und dekodiert
+anschliessend in den Zieltyp (`PackedFloat32Array`/`Float64`/`Int32`/`Int64`,
+`PackedByteArray` fuer Bytes).
+
+- **Release/Cleanup:** `release_data` und Verbindungsende loeschen die Datei;
+  ein Release nach Instanz-Ende ist ein No-Op (Erfolg, `released=false`).
+- **Orphan-Cleanup:** stuerzt der Prozess zwischen Schreiben und Lesen ab,
+  raeumt der naechste Serverstart je Instanz-Tag verwaiste Dateien auf
+  (gemeldet beim Start via stdout).
+- **Fallback:** Wenn kein Tmpdir konfiguriert ist (z. B. remote), liefert
+  `data_get` weiterhin den normalen Binary-Chunk-Transport.
+- **Fehler:** fehlende/korrupte Datei oder Pruefsummen-Mismatch ergibt einen
+  strukturierten Fehler (Kategorie `SERIALIZATION_ERROR`), kein stiller Muell.
+
 **Wichtig:** Nach `release_data` (oder Instanz-Stop/-Crash/-Restart) ist ein
 Handle **stale**: `materialize_data` liefert dann einen strukturierten Fehler
 (Kategorie `TASK_ERROR`, Meldung enthaelt „stale“), statt zu haengen oder
@@ -115,6 +142,13 @@ atomar und wird immer vollstaendig dekodiert (garantiert Fortschritt); ein
 Schub grosser Antworten verteilt sich dadurch ueber mehrere Frames statt
 einen Frame zu blockieren. `BridgeConnectionManager.last_drain_bytes` liefert
 Telemetrie fuer Benchmarks.
+
+Seit Phase 4 gilt derselbe Schutz zusaetzlich fuer die **Datei-
+Materialisierung**: `PythonBridgeDataFile.read_chunked()` liest maximal
+`file_read_bytes_per_frame` Bytes pro Frame und gibt zwischen den Chunks
+zurueck (await), damit auch Multi-Hundert-MB-Datensaetze die Framerate nicht
+abwuergen. Ein Datei-Lesevorgang schreitet also pro Frame um höchstens das
+Budget voran.
 
 Progressive/gestreamte Chunk-Materialisierung einzelner Datensaetze sowie
 Progress-Events sind noch nicht umgesetzt (naechste Ausbaustufe); die

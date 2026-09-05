@@ -1,8 +1,9 @@
 # Python Bridge — Architekturplan der nächsten Generation
 
 **Status:** teilweise umgesetzt — Phase 0 (Quick Wins), Phase 1 (Code Plane),
-Phase 2 (Data Plane, Kern) und Phase 3 (Worker & Recovery) sind implementiert
-und getestet (Stand der Commits `64a9cd9`…`f6cfb1e`). Phasen 4–5 bleiben
+Phase 2 (Data Plane, Kern), Phase 3 (Worker & Recovery) und Phase 4
+(Datei-basierte grosse Daten) sind implementiert und getestet (Stand der
+Commits `64a9cd9`…`da50035`). Phase 5 (GDExtension/Shared Memory) bleibt
 Umsetzungsplan; Shared Memory/mmap (Abschnitt 6) ist bewusst noch nicht
 gebaut. Die Implementierungsentscheidungen sind unten pro Phase markiert.
 
@@ -1279,14 +1280,35 @@ WebSockets bleiben für Control und mittelgroße Daten ausreichend. Ein zweiter 
 
 ## Phase 4 — Datei-basierte große Daten
 
-**Priorität:** sinnvoll/optional
+**Priorität:** sinnvoll/optional — **umgesetzt**
 
-1. file-backed DataRef.
-2. chunkweises Lesen über `FileAccess`.
-3. writable Workspace unter `user://` für Exporte.
-4. Cleanup nach normalem Ende und Crash.
+**Problem:** Sehr grosse Datensaetze (>16 MiB) mussten auch bei der
+DataRef-Materialisierung vollstaendig ueber den WebSocket laufen.
+→ **Ursache:** Der DataRef-Body wurde beim `data_get` komplett serialisiert.
+→ **Lösung:** Der Python-`DataStore` schreibt grosse Werte ab einer Schwelle
+  als Datei unter `workspace/tmp/data/data-<tag>-<id>.bin` (per-Instanz-
+  Dateinamen, sha256-Summe im Deskriptor); `data_get` mit `want=file`
+  liefert nur noch Pfad/Größe/Hash zurueck — die Daten selbst wandern nicht
+  mehr ueber den WebSocket. Godot materialisiert mit dem neuen
+  `PythonBridgeDataFile` chunkweise per `FileAccess` (frame-budgetiert
+  ueber `file_read_bytes_per_frame`), verifiziert die sha256-Summe und
+  markiert den `DataRef` nach Release/Ende als stale.
+→ **erwarteter Vorteil:** kein WebSocket-Transfer mehr fuer grosse Daten;
+  Main-Thread bleibt durch Byte-Budget geschuetzt.
+→ **neue Nachteile/Risiken:** Dateien belegen Plattenplatz bis zum Release;
+  Crash zwischen Schreiben und Lesen hinterlaesst Orphans (werden beim
+  naechsten Serverstart je Instanz-Tag aufgeraeumt).
+→ **Priorität:** sinnvoll — **umgesetzt**
 
-**Akzeptanzkriterien:** Ein großer Datensatz kann ohne WebSocket-Transfer materialisiert werden; parallele Instanzen verwenden getrennte Namen und temporäre Pfade.
+1. file-backed DataRef (Python-Schwelle im `DataStore`, Godot-seitig
+   `file_read_bytes_per_frame` als Lese-Budget pro Frame).
+2. chunkweises Lesen über `FileAccess` mit sha256-Verifikation und
+   Byte-Budget pro Frame (`file_read_bytes_per_frame`).
+3. writable Workspace unter `res://python_bridge/tmp/data`.
+4. Cleanup nach normalem Ende (Release/Connection-Ende) und beim
+   Serverstart (Orphan-Cleanup je Instanz-Tag).
+
+**Akzeptanzkriterien:** Ein großer Datensatz kann ohne WebSocket-Transfer materialisiert werden; parallele Instanzen verwenden getrennte Namen und temporäre Pfade — erfüllt (siehe `docs/DATA_PLANE.md`, Abschnitt „Datei-basierte Materialisierung“).
 
 ## Phase 5 — Native High-Performance-Erweiterung
 
