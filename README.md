@@ -60,6 +60,11 @@ godot --headless --path . --script res://tests/gdscript/run_tests.gd
 
 ## Versionshistorie
 
+- **v0.2.1** — Stabilitäts-Fix für Godot 4.7: Addon kompiliert wieder als
+  Autoload/Editor-Plugin (mehrzeilige `match`/Signaturen, nicht-literalische
+  Konstanten, `class_name`-Parametername, Parse-Zeit-Klassen-Zugriff,
+  Binary-Frame-Roundtrip, deterministische Retry-Zeiten). GDScript-Headless-
+  Suite erstmals lauffähig (34 Tests / 99 Assertions grün).
 - **v0.2.0** — Task Manager, Scheduler (Frame-Sync), Batching, Backpressure,
   Health Monitoring, Crash-Restart mit Backoff, Protokoll v2, Editor-Dock,
   Wrapper-Generierung, Hot Reload, Tests, Dokumentation.
