@@ -58,7 +58,7 @@ func _python_aufrufen() -> void:
 		PythonBridge.get_script_source(SCRIPT_ID), "greet", ["Welt"], {"prefix": "Servus"}, 30000)
 	var submitted := PythonBridge.submit_task(task)
 	if submitted.is_ok():
-		var res := await task.done
+		var res: PythonBridgeResult = await task.done
 		print("[demo] task-API greet = ", res.value)
 	else:
 		push_error("[demo] submit fehlgeschlagen: " + submitted.error_message())
