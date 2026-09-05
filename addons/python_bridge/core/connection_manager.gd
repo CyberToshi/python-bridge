@@ -20,6 +20,14 @@ var last_ping_ms: int = 0
 var last_pong_ms: int = 0
 var pending_ping: bool = false
 
+# Per-frame decode budget: rohe Pakete werden zwischengepuffert und nur bis
+# zum konfigurierten Byte-Budget pro Frame dekodiert (Main-Thread-Schutz).
+# Ein einzelnes Paket groesser als das Budget wird trotzdem komplett
+# dekodiert (Nachrichten sind atomar) - das Budget begrenzt die Summe pro
+# Frame, garantiert aber immer Fortschritt.
+var _pending_raw: Array = []   # [{pkt: PackedByteArray, text: bool}]
+var last_drain_bytes: int = 0  # Telemetrie: dekodierte Bytes der letzten drain()
+
 func _init() -> void:
 	peer = WebSocketPeer.new()
 	peer.supported_protocols = PackedStringArray(["pybridge-v" + str(PROTOCOL_VERSION)])
@@ -34,6 +42,8 @@ func connect_to(host: String, port: int) -> Error:
 	last_ping_ms = 0
 	last_pong_ms = 0
 	pending_ping = false
+	_pending_raw.clear()
+	last_drain_bytes = 0
 	return peer.connect_to_url("ws://%s:%d" % [host, port])
 
 ## Must be called every frame (or in _process) while the instance is active.
@@ -55,19 +65,41 @@ func send_message(msg: Dictionary) -> Error:
 ## Returns all received, decoded frames as Array of {"msg": ..., "data": ...}.
 ## IMPORTANT (Godot 4): text packets arrive as PackedByteArray via
 ## get_packet(); was_string_packet() distinguishes text from binary.
-func drain() -> Array:
-	var msgs: Array = []
+##
+## `byte_budget` (-1 = unlimited) limits how many bytes are decoded this
+## call: everything available is pulled into a pending buffer, but frames
+## are only decoded while the cumulative raw byte size stays within the
+## budget. Leftovers are decoded on the next drain(), so a burst of large
+## results is spread across frames instead of stalling one frame.
+func drain(byte_budget := -1) -> Array:
 	while peer.get_available_packet_count() > 0:
-		var pkt: Variant = peer.get_packet()
+		_pending_raw.append({"pkt": peer.get_packet(), "text": peer.was_string_packet()})
+
+	var msgs: Array = []
+	var consumed := 0
+	while not _pending_raw.is_empty():
+		var entry: Dictionary = _pending_raw[0]
+		var pkt: Variant = entry["pkt"]
+		var cost := _raw_bytes(pkt)
+		if byte_budget >= 0 and consumed > 0 and consumed + cost > byte_budget:
+			break # Rest im naechsten Frame; die vorderste Nachricht geht immer durch
+		consumed += cost
+		_pending_raw.pop_front()
 		var parsed: Dictionary
-		if peer.was_string_packet():
+		if bool(entry["text"]):
 			var text := (pkt as PackedByteArray).get_string_from_utf8() if pkt is PackedByteArray else str(pkt)
 			parsed = PythonProtocol.parse_frame(text)
 		else:
 			parsed = PythonProtocol.parse_frame(pkt)
 		if not parsed.is_empty() and (parsed["msg"] as Dictionary).size() > 0:
 			msgs.append(parsed)
+	last_drain_bytes = consumed
 	return msgs
+
+func _raw_bytes(pkt: Variant) -> int:
+	if pkt is PackedByteArray:
+		return (pkt as PackedByteArray).size()
+	return str(pkt).length()
 
 ## Marks a ping as sent (called by the health monitor).
 func mark_ping_sent() -> void:

@@ -161,7 +161,9 @@ func tick() -> void:
 				_ws_was_open = false
 				return
 			_ws_was_open = true
-			for parsed in _client.drain():
+			# Byte-Budget pro Frame: grosse Antworten werden ueber mehrere Frames
+			# verteilt dekodiert statt in einem Frame (Main-Thread-Schutz).
+			for parsed in _client.drain(int(_settings.get("max_decode_bytes_per_frame", 16 * 1024 * 1024))):
 				_handle_message(parsed)
 			if state == State.READY:
 				_tick_health(now)
