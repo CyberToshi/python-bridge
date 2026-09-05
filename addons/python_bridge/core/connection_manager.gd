@@ -9,7 +9,7 @@ extends RefCounted
 ##
 ## All methods must be called from the main thread (poll model).
 
-const PROTOCOL_VERSION := PythonProtocol.PROTOCOL_VERSION
+const PROTOCOL_VERSION: int = PythonProtocol.PROTOCOL_VERSION
 
 var peer: WebSocketPeer
 var last_error: Error = OK

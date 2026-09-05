@@ -57,9 +57,7 @@ func state_text() -> String:
 	return "unknown"
 
 ## Convenience builder for call tasks (used by call_script etc.).
-static func make_call(p_call_id: String, p_context: String, p_source: String,
-		p_function: String, p_args: Array, p_kwargs: Dictionary,
-		p_timeout_ms: int, p_priority := 0) -> PythonBridgeTask:
+static func make_call(p_call_id: String, p_context: String, p_source: String, p_function: String, p_args: Array, p_kwargs: Dictionary, p_timeout_ms: int, p_priority := 0) -> PythonBridgeTask:
 	var t := PythonBridgeTask.new()
 	t.id = p_call_id
 	t.command = PythonProtocol.CMD_CALL
@@ -73,8 +71,7 @@ static func make_call(p_call_id: String, p_context: String, p_source: String,
 	return t
 
 ## Convenience builder for run tasks (used by execute / execute_script).
-static func make_run(p_call_id: String, p_context: String, p_source: String,
-		p_input: Variant, p_timeout_ms: int, p_priority := 0) -> PythonBridgeTask:
+static func make_run(p_call_id: String, p_context: String, p_source: String, p_input: Variant, p_timeout_ms: int, p_priority := 0) -> PythonBridgeTask:
 	var t := PythonBridgeTask.new()
 	t.id = p_call_id
 	t.command = PythonProtocol.CMD_RUN
@@ -86,8 +83,7 @@ static func make_run(p_call_id: String, p_context: String, p_source: String,
 	return t
 
 ## Convenience builder for define tasks (preload a script into a context).
-static func make_define(p_call_id: String, p_context: String, p_source: String,
-		p_timeout_ms: int, p_priority := 0) -> PythonBridgeTask:
+static func make_define(p_call_id: String, p_context: String, p_source: String, p_timeout_ms: int, p_priority := 0) -> PythonBridgeTask:
 	var t := PythonBridgeTask.new()
 	t.id = p_call_id
 	t.command = PythonProtocol.CMD_DEFINE

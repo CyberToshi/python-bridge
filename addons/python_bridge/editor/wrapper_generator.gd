@@ -31,12 +31,13 @@ static func is_generated(path: String) -> bool:
 ## Generates the wrapper source. `schema` is the Array of function dicts
 ## from introspect_script(); `script_id` and `instance_name` are embedded.
 ## Returns {"ok": true, "code": String} or {"ok": false, "error": String}.
-static func generate(schema: Array, script_id: String,
-		instance_name := PythonBridgeConfig.DEFAULT_INSTANCE) -> Dictionary:
-	var class_name := _class_name_for(script_id)
-	if _class_name_taken(class_name):
+static func generate(schema: Array, script_id: String, instance_name := "") -> Dictionary:
+	if instance_name == "":
+		instance_name = PythonBridgeConfig.DEFAULT_INSTANCE
+	var cls_name := _class_name_for(script_id)
+	if _class_name_taken(cls_name):
 		return {"ok": false, "error":
-			"class_name '%s' is already used in this project. Rename the Python file or remove the conflicting class." % class_name}
+			"class_name '%s' is already used in this project. Rename the Python file or remove the conflicting class." % cls_name}
 
 	var lines: Array[String] = []
 	lines.append(MARKER)
@@ -45,7 +46,7 @@ static func generate(schema: Array, script_id: String,
 	lines.append("# Regenerate: PythonBridge editor dock -> \"Generate wrapper\"")
 	lines.append("")
 	lines.append("extends RefCounted")
-	lines.append("class_name %s" % class_name)
+	lines.append("class_name %s" % cls_name)
 	lines.append("")
 	lines.append("const SCRIPT_ID := %s" % _quote(script_id))
 	lines.append("const INSTANCE_NAME := %s" % _quote(instance_name))
@@ -134,22 +135,29 @@ static func _append_function(lines: Array[String], fn: Dictionary) -> void:
 	lines.append("")
 
 static func _class_name_for(script_id: String) -> String:
+	# Build a valid PascalCase GDScript identifier: separators ("_", "-",
+	# ".", spaces, ...) act as word boundaries, so "mein_skript" and
+	# "mein-skript" both become "MeinSkript".
 	var base := script_id.get_file().get_basename()
-	var parts := base.split("_", false)
 	var pascal := ""
-	for part in parts:
-		if part == "":
-			continue
-		pascal += part.substr(0, 1).to_upper() + part.substr(1)
+	var cap_next := true
+	for c in base:
+		if c == "_":
+			cap_next = true
+		elif c.is_valid_identifier():
+			pascal += c.to_upper() if cap_next else c
+			cap_next = false
+		else:
+			cap_next = true
 	if pascal == "":
 		pascal = "Script"
 	return "PyBridge" + pascal
 
-static func _class_name_taken(class_name: String) -> bool:
-	if ClassDB.class_exists(class_name):
+static func _class_name_taken(cls_name: String) -> bool:
+	if ClassDB.class_exists(cls_name):
 		return true
 	for entry in ProjectSettings.get_global_class_list():
-		if str(entry.get("class", "")) == class_name:
+		if str(entry.get("class", "")) == cls_name:
 			return true
 	return false
 

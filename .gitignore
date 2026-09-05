@@ -8,9 +8,12 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# venv created by the bridge inside user projects
+# Runtime workspace created by the bridge (venv, scripts, tmp, bridge copy)
 python_bridge/venv/
 python_bridge/tmp/
+python_bridge/bridge/
+python_bridge/scripts/
+python_bridge/config/
 
 # OS / editor
 .DS_Store

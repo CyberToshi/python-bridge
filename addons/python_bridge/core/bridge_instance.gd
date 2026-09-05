@@ -248,9 +248,7 @@ func _handle_message(parsed: Dictionary) -> void:
 			_health.record_pong()
 		PythonProtocol.MSG_SHUTDOWN_ACK:
 			_shutdown_ack_received = true
-		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR,
-		PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT,
-		PythonProtocol.MSG_STATUS:
+		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT, PythonProtocol.MSG_STATUS:
 			message_received.emit(instance_name, parsed)
 		_:
 			print("[Python][%s] unknown message: %s" % [instance_name, JSON.stringify(msg)])

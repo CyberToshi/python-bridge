@@ -21,12 +21,19 @@ signal task_done(task: PythonBridgeTask)  # Observable: jeder terminale Task
 signal bridge_event(instance: String, event: Dictionary) # Python -> Godot events
 
 var _instances: Dictionary = {}           # name -> BridgeInstance
-var _settings: Dictionary = PythonBridgeConfig.DEFAULTS.duplicate(true)
+var _settings: Dictionary = {}            # initialized in _init (runtime, after class cache is ready)
 var _task_manager: PythonBridgeTaskManager = null
 var _scheduler: PythonBridgeScheduler = null
 var _task_seq: int = 0
 var _context_seq: int = 0
 var _shutting_down: bool = false
+
+func _init() -> void:
+	# Runtime initialization: the global class cache is fully built by the
+	# time an instance exists, so resolving PythonBridgeConfig here is safe
+	# even when this script is compiled as an autoload during editor startup.
+	if _settings.is_empty():
+		_settings = PythonBridgeConfig.defaults()
 
 func _enter_tree() -> void:
 	_init_task_layer()
@@ -236,8 +243,7 @@ func _next_context_id() -> String:
 	return "temp-%d" % _context_seq
 
 # ------------------------------------------------------------------ Temporaerer Code
-func execute(code: String, input: Variant = {},
-		instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
+func execute(code: String, input: Variant = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
 	var ctx := _next_context_id()
 	var task := PythonBridgeTask.make_run(_next_task_id(), ctx, code, input,
 		int(timeout_sec * 1000.0))
@@ -266,8 +272,7 @@ func get_script_source(script_id: String) -> String:
 	file.close()
 	return src
 
-func execute_script(script_id: String, input: Variant = {},
-		instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
+func execute_script(script_id: String, input: Variant = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
 	var src := get_script_source(script_id)
 	if src == "":
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -277,9 +282,7 @@ func execute_script(script_id: String, input: Variant = {},
 		int(timeout_sec * 1000.0))
 	return await _submit_and_await(task, instance)
 
-func call_script(script_id: String, function: String, args: Array = [],
-		kwargs: Dictionary = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE,
-		timeout_sec := 30.0) -> PythonBridgeResult:
+func call_script(script_id: String, function: String, args: Array = [], kwargs: Dictionary = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
 	var src := get_script_source(script_id)
 	if src == "":
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -289,8 +292,7 @@ func call_script(script_id: String, function: String, args: Array = [],
 		function, args, kwargs, int(timeout_sec * 1000.0))
 	return await _submit_and_await(task, instance)
 
-func define_script(script_id: String,
-		instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
+func define_script(script_id: String, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
 	var src := get_script_source(script_id)
 	if src == "":
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -372,8 +374,7 @@ func hot_reload_script(script_id: String) -> PythonBridgeResult:
 ## Fragt die Funktionen-Signaturen eines Skripts vom Python-Server ab
 ## (AST-basiert, ohne das Skript auszufuehren). Ergebnis: Array von
 ## {name, params, returns, docstring} - Basis fuer den Wrapper-Generator.
-func introspect_script(script_id: String,
-		instance := PythonBridgeConfig.DEFAULT_INSTANCE) -> PythonBridgeResult:
+func introspect_script(script_id: String, instance := PythonBridgeConfig.DEFAULT_INSTANCE) -> PythonBridgeResult:
 	var inst := _get_instance_by_name(instance)
 	if inst == null or not inst.is_ready():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(

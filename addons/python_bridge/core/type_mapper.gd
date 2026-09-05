@@ -84,9 +84,8 @@ static var _custom: Dictionary = {}
 ## Registers a custom tag with encode/decode functions.
 ## `class_name` optionally names the Godot class handled by `encode_fn`;
 ## when provided, Object values of that class are routed to this encoder.
-static func register(tag: String, encode_fn: Callable, decode_fn: Callable,
-		class_name := "") -> void:
-	_custom[tag] = {"encode": encode_fn, "decode": decode_fn, "class": class_name}
+static func register(tag: String, encode_fn: Callable, decode_fn: Callable, custom_class := "") -> void:
+	_custom[tag] = {"encode": encode_fn, "decode": decode_fn, "class": custom_class}
 
 ## Returns all currently registered custom tags.
 static func custom_tags() -> Array:

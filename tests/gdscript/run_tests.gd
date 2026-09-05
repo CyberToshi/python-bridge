@@ -36,8 +36,8 @@ func _run_all() -> void:
 
 func _run_suite(cls: GDScript) -> void:
 	_suites += 1
-	var probe := cls.new()
-	var methods := probe.get_method_list()
+	var probe: Object = cls.new()
+	var methods: Array[Dictionary] = probe.get_method_list()
 	var test_names: Array[String] = []
 	for m in methods:
 		var name := str(m.get("name", ""))
@@ -56,8 +56,9 @@ func _run_suite(cls: GDScript) -> void:
 			_all_failures.append("%s.%s %s" % [cls.resource_path.get_file(), name, f])
 		if instance._failed > 0:
 			print("  %s FAILED" % name)
+			for f in instance._failures:
+				print("      " + f)
 	if suite_failed == 0:
 		print("  suite OK")
 	else:
 		print("  suite FAILED (%d failures)" % suite_failed)
-	probe.free()

@@ -1,6 +1,64 @@
 # Changelog
 
-## v0.2.0 (current)
+## v0.2.1 (current)
+
+Stabilitäts-Fix für Godot 4.7.x (und neuer): Das Addon kompiliert jetzt
+fehlerfrei, wenn es als Autoload/Editor-Plugin geladen wird. Der Editor-
+Parser (Autoload-Pfad) akzeptiert einige Konstrukte nicht, die der normale
+Editor-Scan toleriert - das führte zu einem Kaskadenfehler, bei dem fast
+jedes Skript mit „Could not resolve class … parser error“ scheiterte.
+
+### Behobene Ursachen
+
+- **Mehrzeilige `match`-Pattern-Listen** (Pattern über mehrere Zeilen vor
+  dem Doppelpunkt) wurden im Autoload-Parsing abgelehnt
+  („Expected expression for match pattern“). Alle Pattern-Listen stehen
+  jetzt auf einer Zeile (`config.gd`, `error_handler.gd`, `scheduler.gd`,
+  `bridge_instance.gd`).
+- **Mehrzeilige Funktionssignaturen** (Parameter über mehrere Zeilen)
+  wurden im Autoload-Parsing abgelehnt („Expected parameter name“). Alle
+  Signaturen stehen jetzt auf einer Zeile (`error_handler.gd`, `protocol.gd`,
+  `task.gd`, `type_mapper.gd`, `scheduler.gd`, `python_bridge.gd`,
+  `wrapper_generator.gd`).
+- **Nicht-literalische Konstanten**: `const DEFAULTS := { … }` mit
+  `PackedStringArray()`/Arithmetik wurde als „isn't a constant expression“
+  abgelehnt. `PythonBridgeConfig.DEFAULTS` ist jetzt die Funktion
+  `PythonBridgeConfig.defaults()` (Runtime-Aufbau); weitere Konstanten sind
+  explizit typisiert.
+- **`class_name` als Parameter-/Variablenname** ist im Autoload-Kontext
+  reserviert („Expected parameter name“ / „Expected variable name after
+  var“). In `type_mapper.gd` (`register`) und `wrapper_generator.gd`
+  umbenannt (`custom_class` / `cls_name`).
+- **Autoload-Zugriff auf externe Klassen zur Parse-Zeit**: `_settings`
+  wurde in `python_bridge.gd` mit `PythonBridgeConfig.DEFAULTS`
+  initialisiert; jetzt lazy in `_init()`. Default-Parameter
+  `PythonBridgeConfig.DEFAULT_INSTANCE` in `wrapper_generator.gd`
+  ersetzt durch Runtime-Auflösung.
+- **`python_editor.gd`**: `Engine.get_main_loop().root` funktioniert nicht
+  (MainLoop hat kein `root`) - jetzt `is SceneTree`-Check.
+- **`wrapper_generator.gd`**: `_class_name_for()` erzeugt jetzt gültige
+  PascalCase-Identifiers (Separatoren wie `-`/`_` werden als
+  Wortgrenzen behandelt: `mein_skript` -> `PyBridgeMeinSkript`).
+- **`protocol.gd`**: `build_frame()` akzeptiert optional extern
+  gesammelte Chunks und re-encodiert bereits getaggte Werte nicht mehr
+  (Binary-Frame-Roundtrip funktionierte nicht für vor-encodierte Daten).
+- **`task_manager.gd`**: Retry-Delay nutzt konsistent den übergebenen
+  `now_ms` statt Wall-Clock (`Time.get_ticks_msec`) - Timeout/Retry-
+  Logik ist damit deterministisch und testbar.
+
+### Tests
+
+- GDScript-Headless-Suite läuft jetzt erstmals real: **34 Tests / 99
+  Assertions grün** (`godot --headless --script
+  res://tests/gdscript/run_tests.gd`). Fixes im Runner (RefCounted-free,
+  Typannotationen), in `test_serializer_protocol.gd` (Variant-Warnungen)
+  und `test_task_layer.gd` (Batch-/Retry-Erwartungen).
+- Optionaler E2E-Test `tests/gdscript/e2e_live.gd` (Autoload -> echter
+  Python-Subprozess -> Task): erfordert natives Godot (Flatpak-Sandbox
+  entzieht Subprozessen den venv-Zugriff).
+- Python-Suite weiterhin **33/33 grün**.
+
+## v0.2.0
 
 Grundlegender Ausbau der v0.1.0-Bridge auf den vollen Funktionsumfang des
 Master-Prompts. Protokoll v2.

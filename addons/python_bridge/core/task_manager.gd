@@ -235,7 +235,7 @@ func _resolve_single(task_id: String, msg: Dictionary) -> void:
 		_finish(task, PythonBridgeResult.cancelled(task.id))
 		return
 	if _should_retry(task, err):
-		_requeue(task)
+		_requeue(task, Time.get_ticks_msec())
 		return
 	_finish(task, PythonBridgeResult.failed_with_error(err, task_id, task.instance_id))
 
@@ -249,13 +249,13 @@ func prune_terminal(now_ms: int, keep_ms: int = 60000) -> void:
 			_by_id.erase(task_id)
 
 ## Fails a specific set of tasks (send errors etc.). Retry policy applies.
-func fail_tasks(tasks: Array, instance_id: String, err: Dictionary) -> void:
+func fail_tasks(tasks: Array, instance_id: String, err: Dictionary, now_ms := -1) -> void:
 	for t in tasks:
 		var task := t as PythonBridgeTask
 		if task == null or task.state != PythonBridgeTask.State.RUNNING:
 			continue
 		if _should_retry(task, err):
-			_requeue(task)
+			_requeue(task, now_ms if now_ms >= 0 else Time.get_ticks_msec())
 		else:
 			_finish(task, PythonBridgeResult.failed_with_error(
 				err, task.id, instance_id))
@@ -271,13 +271,13 @@ func fail_queued_for(instance_id: String, err: Dictionary) -> void:
 
 ## Fails all RUNNING tasks of an instance (crash / disconnect). The scheduler
 ## calls this when an instance dies so no task hangs forever.
-func fail_in_flight(instance_id: String, err: Dictionary) -> void:
+func fail_in_flight(instance_id: String, err: Dictionary, now_ms := -1) -> void:
 	for t in _by_id.values():
 		var task := t as PythonBridgeTask
 		if task.state == PythonBridgeTask.State.RUNNING and (
 				task.instance_id == instance_id or task.instance_id == ""):
 			if _should_retry(task, err):
-				_requeue(task)
+				_requeue(task, now_ms if now_ms >= 0 else Time.get_ticks_msec())
 			else:
 				_finish(task, PythonBridgeResult.failed_with_error(
 					err, task.id, instance_id))
@@ -365,10 +365,10 @@ func _should_retry(task: PythonBridgeTask, err: Dictionary) -> bool:
 			return code == PythonBridgeErrorHandler.CATEGORY_PROCESS_ERROR
 	return false
 
-func _requeue(task: PythonBridgeTask) -> void:
+func _requeue(task: PythonBridgeTask, now_ms: int) -> void:
 	task.retries_left -= 1
 	task.state = PythonBridgeTask.State.QUEUED
-	task._next_attempt_ms = Time.get_ticks_msec() + int(_cfg.get("retry_delay_ms", 250))
+	task._next_attempt_ms = now_ms + int(_cfg.get("retry_delay_ms", 250))
 	_insert_sorted(task)
 
 # ------------------------------------------------------------------ Internal

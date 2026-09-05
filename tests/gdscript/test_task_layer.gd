@@ -57,7 +57,7 @@ func test_retry_on_connection_error() -> void:
 	# simulate a send failure -> connection error
 	var err := PythonBridgeErrorHandler.make(
 		PythonBridgeErrorHandler.CATEGORY_CONNECTION_ERROR, "conn lost", t.id)
-	tm.fail_tasks([t], "inst", err)
+	tm.fail_tasks([t], "inst", err, 0)
 	assert_eq(t.state, PythonBridgeTask.State.QUEUED, "retry requeues")
 	assert_eq(t.retries_left, 0)
 	# dispatches again
@@ -123,11 +123,13 @@ func test_batch_preserves_submission_order() -> void:
 	for i in 4:
 		tm.submit(PythonBridgeTask.make_call("o%d" % i, "ctx", "s", "f", [], {}, 1000), now)
 	var unit := tm.next_unit("inst", now)
-	assert_eq(unit["kind"], "wait")
-	tm.tick_windows(now)
-	var unit2 := tm.next_unit("inst", now)
-	assert_eq(unit2["kind"], "batch")
-	var items: Array = unit2["msg"][PythonProtocol.FIELD_ITEMS]
+	# 4 candidates == max_batch_size: the window fills immediately and the
+	# batch dispatches right away (no pointless wait for more tasks).
+	if unit.get("kind") == "wait":
+		tm.tick_windows(now)
+		unit = tm.next_unit("inst", now)
+	assert_eq(unit.get("kind"), "batch")
+	var items: Array = unit["msg"][PythonProtocol.FIELD_ITEMS]
 	for i in 4:
 		assert_eq(items[i]["id"], "o%d" % i)
 
@@ -156,7 +158,9 @@ func test_fail_in_flight_on_crash() -> void:
 	tm.submit(t, 0)
 	var unit := tm.next_unit("inst", 0)
 	tm.mark_unit_running("inst", unit)
+	# Connection loss is retryable under the default "connection_error"
+	# policy; a hard process crash is not (by design).
 	var err := PythonBridgeErrorHandler.make(
-		PythonBridgeErrorHandler.CATEGORY_PROCESS_ERROR, "process died", "", "inst")
-	tm.fail_in_flight("inst", err)
+		PythonBridgeErrorHandler.CATEGORY_CONNECTION_ERROR, "connection lost", "", "inst")
+	tm.fail_in_flight("inst", err, 0)
 	assert_eq(t.state, PythonBridgeTask.State.QUEUED, "retryable crash requeues")

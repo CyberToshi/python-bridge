@@ -55,16 +55,22 @@ const FIELD_ITEMS := "items"
 ## Builds a complete frame for a message dictionary. Serializes `data` (and
 ## any nested batch item data) through the type mapper, collecting binary
 ## chunks. Returns {"text": String} or {"binary": PackedByteArray}.
-static func build_frame(msg: Dictionary) -> Dictionary:
+static func build_frame(msg: Dictionary, external_chunks: Array = []) -> Dictionary:
 	var chunks: Array = []
+	chunks.append_array(external_chunks)
 	var enc: Dictionary = msg.duplicate(true)
 	if enc.has("data"):
-		enc["data"] = PythonBridgeSerializer.encode(enc["data"], chunks)
+		# Callers may pass raw values (encoded here) or already-encoded,
+		# tagged values (e.g. from PythonBridgeSerializer.encode + external
+		# chunk collection). Re-encoding a tagged value would wrap it in a
+		# {"$pb":"dict"} and orphan the chunk reference - so skip it.
+		if not _is_tagged(enc["data"]):
+			enc["data"] = PythonBridgeSerializer.encode(enc["data"], chunks)
 	if enc.has(FIELD_ITEMS) and enc[FIELD_ITEMS] is Array:
 		var items: Array = []
 		for item in enc[FIELD_ITEMS]:
 			var it: Dictionary = (item as Dictionary).duplicate(true)
-			if it.has("data"):
+			if it.has("data") and not _is_tagged(it["data"]):
 				it["data"] = PythonBridgeSerializer.encode(it["data"], chunks)
 			items.append(it)
 		enc[FIELD_ITEMS] = items
@@ -80,6 +86,12 @@ static func build_frame(msg: Dictionary) -> Dictionary:
 		out.append_array(_u32_bytes(chunk.size()))
 		out.append_array(chunk)
 	return {"binary": out}
+
+## True when `v` is a dictionary already carrying a type tag ($pb), i.e. it
+## went through PythonBridgeSerializer.encode (or came from the Python side)
+## and must not be encoded again.
+static func _is_tagged(v: Variant) -> bool:
+	return v is Dictionary and (v as Dictionary).has(PythonBridgeSerializer.TAG)
 
 ## Parses a frame (String or PackedByteArray). Returns
 ## {"msg": Dictionary, "data": Variant}; batch items are decoded in place
@@ -129,8 +141,7 @@ static func _decode_data_in_place(msg: Dictionary, chunks: Array) -> void:
 				items[i]["data"] = PythonBridgeSerializer.decode(item["data"], chunks)
 
 ## Convenience: builds a task_result / task_error response envelope.
-static func response_envelope(msg_type: String, id: String, status: String,
-		data: Variant = null, error: Dictionary = {}, ms: int = 0) -> Dictionary:
+static func response_envelope(msg_type: String, id: String, status: String, data: Variant = null, error: Dictionary = {}, ms: int = 0) -> Dictionary:
 	var msg := {
 		"v": PROTOCOL_VERSION,
 		"type": msg_type,

@@ -35,9 +35,7 @@ func _init(cfg: Dictionary) -> void:
 	_cfg = cfg
 
 ## Attaches dependencies. Called once by the facade after construction.
-func setup(task_manager: PythonBridgeTaskManager,
-		get_ready_instances: Callable, send_message: Callable,
-		on_event: Callable = Callable(), get_instance: Callable = Callable()) -> void:
+func setup(task_manager: PythonBridgeTaskManager, get_ready_instances: Callable, send_message: Callable, on_event: Callable = Callable(), get_instance: Callable = Callable()) -> void:
 	_task_manager = task_manager
 	_get_ready_instances = get_ready_instances
 	_send_message = send_message
@@ -59,8 +57,7 @@ func on_message(instance_id: String, parsed: Dictionary) -> void:
 	var msg: Dictionary = parsed.get("msg", {})
 	var msg_type := str(msg.get("type", ""))
 	match msg_type:
-		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR,
-		PythonProtocol.MSG_BATCH_RESULT:
+		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT:
 			_inbox.append({"instance_id": instance_id, "parsed": parsed})
 		PythonProtocol.MSG_EVENT:
 			if _on_event.is_valid():
@@ -74,7 +71,7 @@ func on_message(instance_id: String, parsed: Dictionary) -> void:
 
 ## Fails all in-flight units of a dead instance (crash handling hook).
 func on_instance_lost(instance_id: String, err: Dictionary) -> void:
-	_task_manager.fail_in_flight(instance_id, err)
+	_task_manager.fail_in_flight(instance_id, err, Time.get_ticks_msec())
 	_in_flight_units.erase(instance_id)
 
 
@@ -111,7 +108,7 @@ func _dispatch(now_ms: int) -> void:
 				tasks.append(unit["task"])
 			elif unit.get("kind") == "batch":
 				tasks = unit.get("tasks", [])
-			_task_manager.fail_tasks(tasks, instance_id, fail_err)
+			_task_manager.fail_tasks(tasks, instance_id, fail_err, now_ms)
 			continue
 		_record_unit(instance_id, unit)
 		dispatched += 1

@@ -34,8 +34,7 @@ const STATUS_INTERNAL := "internal"
 const STATUS_CANCELLED := "cancelled"
 
 ## Builds a structured error dictionary.
-static func make(code: String, message: String, task_id := "",
-		instance_id := "", exc_type := "", traceback := "") -> Dictionary:
+static func make(code: String, message: String, task_id := "", instance_id := "", exc_type := "", traceback := "") -> Dictionary:
 	var err := {
 		"code": code,
 		"message": message,
@@ -78,8 +77,7 @@ static func status_for_code(code: String) -> String:
 			return STATUS_TIMEOUT
 		CATEGORY_PROCESS_ERROR, CATEGORY_CONNECTION_ERROR:
 			return STATUS_DOWN
-		CATEGORY_DEPENDENCY_ERROR, CATEGORY_SERIALIZATION_ERROR,
-		CATEGORY_PROTOCOL_ERROR, CATEGORY_BRIDGE_ERROR:
+		CATEGORY_DEPENDENCY_ERROR, CATEGORY_SERIALIZATION_ERROR, CATEGORY_PROTOCOL_ERROR, CATEGORY_BRIDGE_ERROR:
 			return STATUS_INTERNAL
 	return STATUS_ERROR
 

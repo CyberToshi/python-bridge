@@ -33,9 +33,9 @@ func _init(bridge: Object = null) -> void:
 func _resolve_bridge() -> Object:
 	if _bridge != null:
 		return _bridge
-	var root := Engine.get_main_loop().root if Engine.get_main_loop() else null
-	if root:
-		_bridge = root.get_node_or_null("PythonBridge")
+	var main_loop := Engine.get_main_loop()
+	if main_loop is SceneTree:
+		_bridge = (main_loop as SceneTree).root.get_node_or_null("PythonBridge")
 	return _bridge
 
 # ------------------------------------------------------------------ UI
