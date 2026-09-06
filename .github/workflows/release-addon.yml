@@ -18,8 +18,9 @@ jobs:
 
       - name: Package addon
         run: |
-          cd addons
-          zip -r ../python_bridge_addon.zip python_bridge/ -x '*/__pycache__/*' '*.pyc' '*.pyo'
+          # addons/python_bridge/ must stay at the top of the ZIP so extracting
+          # it into a project lands the plugin in addons/python_bridge/.
+          zip -r python_bridge_addon.zip addons/python_bridge/ -x '*/__pycache__/*' '*.pyc' '*.pyo'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
