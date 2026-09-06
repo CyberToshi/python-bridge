@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title>Python Bridge</title>
+  <rect width="64" height="64" rx="14" fill="#2e8555"/>
+  <path d="M18 17h16c7 0 12 5 12 12v6H30v5h16v-5h4v7c0 7-5 12-12 12H22c-7 0-12-5-12-12V26c0-5 3-9 8-9Zm4 7v8h16v-3c0-3-2-5-5-5H22Z" fill="#fff"/>
+  <path d="M46 47H30c-7 0-12-5-12-12v-6h16v-5H18v5h-4v-7c0-7 5-12 12-12h16c7 0 12 5 12 12v13c0 5-3 9-8 12Zm-4-7v-8H26v3c0 3 2 5 5 5h11Z" fill="#d9f7e5"/>
+</svg>

@@ -1,0 +1,65 @@
+.hero {
+  padding: 6rem 0;
+  color: #fff;
+  background: radial-gradient(circle at 85% 15%, rgba(101, 214, 147, 0.28), transparent 28%), linear-gradient(135deg, #10291d 0%, #1f6b43 100%);
+}
+
+.heroContent {
+  max-width: 760px;
+}
+
+.hero h1 {
+  margin-bottom: 1rem;
+  font-size: clamp(3rem, 8vw, 5.5rem);
+}
+
+.subtitle {
+  max-width: 680px;
+  color: #d9f7e5;
+  font-size: 1.35rem;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  margin-bottom: 0.75rem;
+  color: #65d693;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.featureCard {
+  height: 100%;
+  padding: 1.5rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 16px;
+  background: var(--ifm-background-surface-color);
+  box-shadow: 0 10px 30px rgba(16, 41, 29, 0.08);
+}
+
+.featureCard h2 {
+  font-size: 1.25rem;
+}
+
+.architecture {
+  background: var(--ifm-color-emphasis-100);
+}
+
+.diagram {
+  margin: 0;
+  padding: 1.5rem;
+  border: 1px solid rgba(101, 214, 147, 0.35);
+  border-radius: 16px;
+  color: #d9f7e5;
+  background: #10291d;
+  font-size: 1.05rem;
+  line-height: 1.7;
+}

@@ -1,0 +1,28 @@
+name: Release addon zip
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package addon
+        run: |
+          cd addons
+          zip -r ../python_bridge_addon.zip python_bridge/ -x '*/__pycache__/*' '*.pyc' '*.pyo'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: python_bridge_addon.zip
+          generate_release_notes: true
