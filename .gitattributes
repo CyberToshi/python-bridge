@@ -1,0 +1,6 @@
+# Only include the addons folder when downloading from the Asset Library.
+# GitHub ZIP archives honour export-ignore, so AssetLib users get exactly
+# addons/python_bridge/ and no repository/docusaurus files.
+/** export-ignore
+/addons !export-ignore
+/addons/** !export-ignore
