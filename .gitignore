@@ -4,6 +4,9 @@ __pycache__/
 *.pyo
 *.egg-info/
 
+# Godot editor auto-import sidecars (docs-site lives inside a Godot project dir)
+*.import
+
 # Docusaurus build artifacts
 docs-site/node_modules/
 docs-site/build/
