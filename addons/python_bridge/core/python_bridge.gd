@@ -562,7 +562,7 @@ func _materialize_file(desc: Dictionary) -> PythonBridgeResult:
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_SERIALIZATION_ERROR,
 			str(res.get("error", "File materialization failed"))))
-	var value := PythonBridgeDataFile.decode_bytes(
+	var value: Variant = PythonBridgeDataFile.decode_bytes(
 		res.get("data", PackedByteArray()),
 		str(desc.get("dtype", "float64")),
 		desc.get("shape", []))

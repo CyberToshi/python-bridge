@@ -272,20 +272,32 @@ func _copy_dir_recursive(src: String, dst: String) -> void:
 	var dir := DirAccess.open(src)
 	if dir == null:
 		return
+	# Build-Artifacts nie mitkopieren: __pycache__ enthaelt binaere .pyc-
+	# Dateien (kein gueltiges UTF-8) und gehoert in die Distribution nicht
+	# hinein - Python erzeugt den Cache im Ziel bei Bedarf selbst.
+	if src.get_file() == "__pycache__":
+		return
 	DirAccess.make_dir_recursive_absolute(dst)
 	dir.list_dir_begin()
 	var entry := dir.get_next()
 	while entry != "":
 		if dir.current_is_dir():
-			_copy_dir_recursive(src + "/" + entry, dst + "/" + entry)
+			if entry != "__pycache__":
+				_copy_dir_recursive(src + "/" + entry, dst + "/" + entry)
 		else:
+			if entry.ends_with(".pyc"):
+				entry = dir.get_next()
+				continue
 			var fin := FileAccess.open(src + "/" + entry, FileAccess.READ)
 			if fin:
-				var text := fin.get_as_text()
+				# Binaersicher: Rohbytes 1:1 uebernehmen (statt get_as_text/
+				# store_string, das an Nicht-UTF-8-Bytes scheitert und pro
+				# invalidem Byte einen Unicode-parsing-error spammt).
+				var raw := fin.get_buffer(fin.get_length())
 				fin.close()
 				var fout := FileAccess.open(dst + "/" + entry, FileAccess.WRITE)
 				if fout:
-					fout.store_string(text)
+					fout.store_buffer(raw)
 					fout.close()
 		entry = dir.get_next()
 

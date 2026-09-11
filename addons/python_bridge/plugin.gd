@@ -30,10 +30,17 @@ func _enter_tree() -> void:
 	# Optionaler Hochleistungspfad (GDScript -> C++ -> GDExtension).
 	# Dieser Dock ist unabhaengig vom Python-Dock; er nutzt den bundled
 	# GDScript2All-Transpiler und erzeugt eine GDExtension-Scaffold-Struktur.
-	_hp_plugin = preload("res://addons/python_bridge/editor/hp_gdscript/plugin_hp.gd").new()
-	# Call the optional nested editor plugin through Callable so the method
-	# dispatch remains explicit and compatible with Godot 4's parser.
-	Callable(_hp_plugin, "_enter_tree").call_deferred()
+	# Der Skript-Pfad wird aus get_script() abgeleitet (kein harter
+	# res://addons/python_bridge/...-Preload), damit das Add-on auch dann
+	# funktioniert, wenn es unter einem anderen Ordner installiert wurde.
+	var hp_plugin_path: String = get_script().resource_path.get_base_dir().path_join("editor/hp_gdscript/plugin_hp.gd")
+	var hp_plugin_script := load(hp_plugin_path) as GDScript
+	if hp_plugin_script:
+		_hp_plugin = hp_plugin_script.new()
+		# Call the optional nested editor plugin through Callable so the
+		# method dispatch remains explicit and compatible with Godot 4's
+		# parser.
+		Callable(_hp_plugin, "_enter_tree").call_deferred()
 
 func _exit_tree() -> void:
 	# Sauberer Shutdown aller Python-Instanzen, danach Dock + Autoload

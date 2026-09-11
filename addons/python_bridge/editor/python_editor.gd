@@ -399,7 +399,7 @@ func _remove_tab(script_id: String) -> void:
 	if idx < 0:
 		return
 	_open_order.remove_at(idx)
-	var ed := _editors.get(script_id, null)
+	var ed: CodeEdit = _editors.get(script_id, null)
 	if ed:
 		_editors.erase(script_id)
 		ed.queue_free()
