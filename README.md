@@ -11,13 +11,22 @@ verbunden.
 | --- | --- |
 | [`addons/python_bridge/`](addons/python_bridge/) | Das Godot-Addon (Plugin) |
 | [`docs-site/`](docs-site/) | Docusaurus-Quelle der Dokumentations-Website |
+| [`docs/`](docs/) | Ausführliche Repository-Guides (manueller Workflow, Screenshots, Cluster-Plan) |
 | `.github/workflows/deploy-docs.yml` | Baut die Docs und veröffentlicht sie auf GitHub Pages |
 | `.github/workflows/release-addon.yml` | Baut bei jedem `v*`-Tag die Addon-Zip und hängt sie an ein GitHub Release |
 
 ## Dokumentation
 
-Die vollständige Dokumentation ist online unter
-**<https://cybertoshi.github.io/python-bridge/>** verfügbar – lokal bauen mit:
+Die vollständige, strukturierte Dokumentation ist online unter
+**<https://cybertoshi.github.io/python-bridge/>** verfügbar. Sie deckt
+Installation, Konfiguration, Python-Seite, DataRefs, Architektur,
+Fehlerbehebung und eine **API-Referenz für jede Funktion des Addons** ab.
+
+Zusätzlich liegen im Repository ausführliche Guides unter [`docs/`](docs/) –
+z. B. der manuelle Copy-Paste-Workflow
+[`docs/HANDS_ON_CONNECT_GUIDE.md`](docs/HANDS_ON_CONNECT_GUIDE.md).
+
+Lokal bauen:
 
 ```bash
 cd docs-site

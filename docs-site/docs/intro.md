@@ -104,10 +104,19 @@ Datei-Transport). Details und Prüfbefehle: [Godot-Verifikation](./godot-verific
 5. [Python-Seite verstehen](./python-seite) – was in Python passiert
 6. [Große Daten (DataRefs)](./datenebene) – Data-Plane
 7. [API-Referenz](./api) – jede Funktion dokumentiert
+   - [Tasks & Scheduling](./api-tasks)
+   - [Daten & Serialisierung](./api-data)
+   - [Kern-Komponenten](./api-internals)
+   - [Editor & HP-Werkzeuge](./api-editor)
 8. [Fehlerbehebung](./fehlerbehebung) – Probleme und Fehlercodes
 
 Ausblick (bewusst getrennt): ein zweiter, geplanter Pfad für sehr große
-lokale Daten über Shared Memory ([Hochleistungspfade](./hochleistungspfade))
+lokale Daten über Shared Memory ([Kommunikationspfade](./hochleistungspfade))
 und die konzeptionell vorbereitete Cluster-Verteilung
-(`docs/CLUSTER_INTEGRATION_PLAN.md` im Repository) – beides ist noch nicht
-Teil des verifizierten Standardwegs.
+([`docs/CLUSTER_INTEGRATION_PLAN.md`](https://github.com/CyberToshi/python-bridge/blob/main/docs/CLUSTER_INTEGRATION_PLAN.md))
+– beides ist noch nicht Teil des verifizierten Standardwegs.
+
+Für den ausführlichen manuellen Workflow (welcher Node, welcher Code,
+Schritt für Schritt) liegt im Repository der
+[HANDS-ON-Connect-Guide](https://github.com/CyberToshi/python-bridge/blob/main/docs/HANDS_ON_CONNECT_GUIDE.md)
+bereit.

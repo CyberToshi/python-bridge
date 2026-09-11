@@ -17,11 +17,21 @@ const sidebars = {
     'konfiguration',
     'python-seite',
     'datenebene',
-    'api',
+    {
+      type: 'category',
+      label: 'API-Referenz',
+      collapsed: false,
+      items: [
+        'api',
+        'api-tasks',
+        'api-data',
+        'api-internals',
+        'api-editor',
+      ],
+    },
     'godot-verification',
     'architecture',
     'hochleistungspfade',
-    'high-performance-paths',
     'fehlerbehebung',
   ],
 };
