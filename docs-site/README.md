@@ -29,9 +29,26 @@ Docusaurus opens a local development server, normally at
 ## Build the site
 
 ```bash
-npm run build
+npm run build     # exportiert zuerst das Druck-HTML, dann der Docusaurus-Build
 npm run serve
 ```
+
+## Printable HTML / PDF export
+
+The whole documentation can be exported as a single, print-optimized document
+(table of contents, page breaks, all chapters in one file):
+
+```bash
+npm run export:docs        # HTML + PDF (PDF requires LibreOffice/soffice)
+npm run export:docs:html   # HTML only
+```
+
+The result is written to `static/PythonBridge_Dokumentation.html` and
+`static/PythonBridge_Dokumentation.pdf` and served at
+`/python-bridge/PythonBridge_Dokumentation.*`. `npm run build` regenerates the
+HTML on every build so it never goes stale; the PDF is a committed snapshot
+the maintainer regenerates with `npm run export:docs` when the docs change
+substantially.
 
 ## Configure GitHub
 
