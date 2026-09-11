@@ -103,6 +103,14 @@ const config = {
                 label: 'API',
                 to: '/docs/api',
               },
+              {
+                label: 'Gesamtdokumentation (PDF)',
+                href: 'https://cybertoshi.github.io/python-bridge/PythonBridge_Dokumentation.pdf',
+              },
+              {
+                label: 'Gesamtdokumentation (HTML, druckbar)',
+                href: 'https://cybertoshi.github.io/python-bridge/PythonBridge_Dokumentation.html',
+              },
             ],
           },
           {

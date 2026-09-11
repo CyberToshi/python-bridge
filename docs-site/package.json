@@ -6,7 +6,9 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
-    "build": "docusaurus build",
+    "build": "node scripts/export-docs.mjs --no-pdf && docusaurus build",
+    "export:docs": "node scripts/export-docs.mjs",
+    "export:docs:html": "node scripts/export-docs.mjs --no-pdf",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
@@ -39,5 +41,8 @@
   },
   "overrides": {
     "webpack": "5.96.1"
+  },
+  "devDependencies": {
+    "marked": "^18.0.12"
   }
 }

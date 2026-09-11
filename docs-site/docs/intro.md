@@ -120,3 +120,12 @@ Für den ausführlichen manuellen Workflow (welcher Node, welcher Code,
 Schritt für Schritt) liegt im Repository der
 [HANDS-ON-Connect-Guide](https://github.com/CyberToshi/python-bridge/blob/main/docs/HANDS_ON_CONNECT_GUIDE.md)
 bereit.
+
+:::tip Offline & Druck
+Die komplette Dokumentation gibt es zusätzlich als einzelne, druckoptimierte
+Ausgabe (alle Kapitel in einem Dokument mit Inhaltsverzeichnis und
+Seitenumbrüchen):
+
+- [Gesamtdokumentation als HTML (druckbar)](https://cybertoshi.github.io/python-bridge/PythonBridge_Dokumentation.html)
+- [Gesamtdokumentation als PDF](https://cybertoshi.github.io/python-bridge/PythonBridge_Dokumentation.pdf)
+:::
