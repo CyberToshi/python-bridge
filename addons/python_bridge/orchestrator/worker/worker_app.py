@@ -215,11 +215,27 @@ def load_config() -> dict:
     return cfg
 
 
+def _restrict_file(path: Path) -> None:
+    """Nur fuer den eigenen Benutzer lesbar machen.
+
+    In der Konfiguration steht das Token im Klartext. Ohne das waere sie auf
+    Mehrbenutzer-Rechnern (POSIX-Standard-umask) fuer andere Konten lesbar.
+    Reine Rechteanpassung: scheitert sie, laeuft der Worker trotzdem weiter.
+    """
+    if IS_WINDOWS:
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def save_config(cfg: dict) -> None:
     try:
         CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     except OSError:
         pass
+    _restrict_file(CONFIG_PATH)
 
 
 def local_ip() -> str:
@@ -540,6 +556,7 @@ class WorkerApp:
                       text_color=TEXT, font=FONT_SMALL).pack(side="left", pady=(0, 6))
         self._update_tls_hint()
         self.var_tls.trace_add("write", lambda *_: self._update_tls_hint())
+        self.var_pair.trace_add("write", lambda *_: self._update_tls_hint())
 
         right = Card(body)
         right.pack(side="left", fill="both", expand=True, padx=(8, 0))
@@ -747,11 +764,16 @@ class WorkerApp:
         if getattr(self, "tls_label", None) is None:
             return
         if bool(self.var_tls.get()):
-            self.tls_label.configure(
-                text="Die Verbindung ist verschluesselt (wss://). Das Zertifikat "
-                     "erzeugt der Worker selbst - auf dem Hauptrechner einmal "
-                     "\"Selbstsignierte Zertifikate erlauben\" einschalten.",
-                fg=GOOD)
+            text = ("Die Verbindung ist verschluesselt (wss://). Das Zertifikat "
+                    "erzeugt der Worker selbst - auf dem Hauptrechner einmal "
+                    "\"Selbstsignierte Zertifikate erlauben\" einschalten.")
+            if bool(self.var_pair.get()):
+                # Der ehrliche Hinweis direkt am Schalter: TLS deckt die
+                # Verbindung ab, nicht die Rechner-Suche.
+                text += ("\n\nHinweis: Die automatische Kopplung schickt das "
+                         "Token unverschluesselt im Suchsignal mit. Im eigenen "
+                         "LAN in Ordnung - in fremden Netzen abschalten.")
+            self.tls_label.configure(text=text, fg=GOOD)
         else:
             self.tls_label.configure(
                 text="Ohne Verschluesselung (ws://). Im eigenen LAN meist in "

@@ -210,7 +210,9 @@ func _build_workers_card() -> Control:
 	manual.add_theme_constant_override("separation", 8)
 	box.add_child(manual)
 	var url := LineEdit.new()
-	url.placeholder_text = "ws://192.168.1.42:8765"
+	# Schema bewusst als wss:// vormachen: nur so passt der Eintrag zu einem
+	# Worker, den die App standardmaessig verschluesselt startet (ws:// scheitert).
+	url.placeholder_text = "wss://192.168.1.42:8765"
 	url.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_input(url)
 	manual.add_child(url)

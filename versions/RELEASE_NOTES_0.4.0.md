@@ -94,6 +94,36 @@ den tatsächlich importierten Modulen, prüft, dass kein Token im ZIP landet, un
 
 ---
 
+## 3a. Nachbesserungen in dieser Fassung (Doku-Prüfung)
+
+Bei der Durchsicht der Dokumentation gegen den Code kamen Fehler und
+Unklarheiten heraus – korrigiert wurden **Dokumentation und zwei Kleinigkeiten
+im Programm**:
+
+* **Suchsignal ist nicht verschlüsselt.** Die Sicherheitsseite behauptete, der
+  Discovery-Beacon sei mit TLS geschützt. Er ist ein unverschlüsselter
+  UDP-Broadcast, und bei eingeschalteter automatischer Kopplung steht das
+  **Token im Klartext** darin. Jetzt steht das überall so – inklusive der
+  konkreten Empfehlung, die Kopplung in fremden Netzen abzuschalten
+  (`SAFETY.md` §3b).
+* **TLS gilt für die App, nicht für die Kommandozeile.** Wer den Worker von Hand
+  startet, braucht `--tls-self-signed`; ohne läuft er wie bisher im Klartext.
+  Das sagen `CLIENT_SETUP.md` und `WORKER_SETUP.md` jetzt am Anfang.
+* **Programm:** das Eingabefeld für manuelle Worker zeigt als Beispiel
+  `wss://…` statt `ws://…` – der alte Platzhalter führte direkt in einen
+  scheiternden Handshake.
+* **Programm:** `worker_config.json` (enthält das Token im Klartext) wird unter
+  Linux/macOS jetzt mit Rechten `0600` angelegt statt weltweit lesbar.
+* **Programm:** der Hinweis unter den Schaltern nennt jetzt, dass die
+  automatische Kopplung das Token unverschlüsselt mitsendet.
+* **Doku:** fehlende Tabellen aller Cluster-Einstellungen ergänzt (Konfiguration),
+  Firewall-Richtungen richtiggestellt (der Worker bindet UDP auf einem freien
+  Port), Dateigrenzen präzisiert (eine einzelne Datei ist im Manager fest auf
+  512 MB begrenzt), Oberflächen-Texte wörtlich übernommen und veraltete Sätze
+  entfernt („Cluster nicht implementiert“, „keine Dateiübertragung“).
+
+---
+
 ## 4. Tests (alle grün)
 
 ```text
@@ -103,7 +133,8 @@ den tatsächlich importierten Modulen, prüft, dass kein Token im ZIP landet, un
        Aufgabe über die Oberfläche starten), Einstiegsdatei im Projektordner
 [worker-test]         45 passed, 0 failed
 [file-test]           21 passed, 0 failed
-[worker-ui]           34 passed, 0 failed   (+13: TLS-Startargumente, Diagnosetext)
+[worker-ui]           36 passed, 0 failed   (+15: TLS-Startargumente, Diagnosetext,
+                                                Rechte der Token-Datei 0600)
 [tls-test]            29 passed, 0 failed   (neu)
 [release-test]        21 passed, 0 failed   (neu: Paket vollständig + läuft)
 [e2e Transport]       ERFOLG
