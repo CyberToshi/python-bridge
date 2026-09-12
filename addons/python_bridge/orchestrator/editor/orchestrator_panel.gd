@@ -35,6 +35,9 @@ const GRAPH_PATH := "res://orchestrator_graph.json"
 const WORKERS_PATH := "res://orchestrator_workers.json"
 
 var cfg: OrchestratorConfig
+# Laufzeit-Pfade (per _init überschreibbar, z. B. für hermetische Tests).
+var workers_path: String = WORKERS_PATH
+var graph_path: String = GRAPH_PATH
 var graph_model: OrchestratorGraphModel
 var servers: OrchestratorServerManager
 var tasks: OrchestratorTaskManager
@@ -52,8 +55,12 @@ var _rng := RandomNumberGenerator.new()
 var _seeded := false
 
 
-func _init(p_config: OrchestratorConfig = null) -> void:
+func _init(p_config: OrchestratorConfig = null, p_workers_path := "", p_graph_path := "") -> void:
 	cfg = p_config if p_config != null else OrchestratorConfig.defaults()
+	if p_workers_path != "":
+		workers_path = p_workers_path
+	if p_graph_path != "":
+		graph_path = p_graph_path
 	graph_model = OrchestratorGraphModel.new()
 	servers = OrchestratorServerManager.new(cfg)
 	tasks = OrchestratorTaskManager.new(cfg)
@@ -183,6 +190,9 @@ func refresh() -> void:
 func editor_poll() -> void:
 	if _graph == null:
 		return
+	# Von UI-Interaktionen (Ziehen) geänderte Positionen vorher ins Modell
+	# schreiben, damit der anschließende Refresh sie nicht überschreibt.
+	_save_dragged_positions()
 	var now := Time.get_ticks_msec()
 	transport.poll()
 	if _demo_mode and transport.worker_ids().is_empty():
@@ -195,12 +205,12 @@ func editor_poll() -> void:
 	_update_status()
 
 
-func save_graph(path: String = GRAPH_PATH) -> Error:
-	return graph_model.save_json(path)
+func save_graph(path: String = "") -> Error:
+	return graph_model.save_json(path if path != "" else graph_path)
 
 
-func load_graph(path: String = GRAPH_PATH) -> bool:
-	var loaded := OrchestratorGraphModel.load_json(path)
+func load_graph(path: String = "") -> bool:
+	var loaded := OrchestratorGraphModel.load_json(path if path != "" else graph_path)
 	if loaded == null:
 		return false
 	graph_model = loaded
@@ -241,10 +251,10 @@ func _restore_or_seed() -> void:
 	if not graph_model.nodes.is_empty():
 		return
 	# 2) Gespeicherten Graph laden.
-	var loaded := OrchestratorGraphModel.load_json(GRAPH_PATH)
+	var loaded := OrchestratorGraphModel.load_json(graph_path)
 	if loaded != null and not loaded.nodes.is_empty():
 		graph_model = loaded
-		_log_text("Gespeicherten Graph geladen: %s" % GRAPH_PATH)
+		_log_text("Gespeicherten Graph geladen: %s" % graph_path)
 		return
 	# 3) Sonst eine lauffaehige Demo anlegen, damit das Dock nie leer ist.
 	_seed_demo()
@@ -254,12 +264,12 @@ func _restore_or_seed() -> void:
 ## Format: [{"id":"worker-a","name":"PC 2","url":"ws://192.168.1.42:8765",
 ##           "token":"..."}]
 func _connect_configured_workers() -> int:
-	if not FileAccess.file_exists(WORKERS_PATH):
+	if not FileAccess.file_exists(workers_path):
 		return 0
-	var text := FileAccess.get_file_as_string(WORKERS_PATH)
+	var text := FileAccess.get_file_as_string(workers_path)
 	var parsed: Variant = JSON.parse_string(text)
 	if not (parsed is Array):
-		push_warning("[Orchestrator] %s ist kein JSON-Array." % WORKERS_PATH)
+		push_warning("[Orchestrator] %s ist kein JSON-Array." % workers_path)
 		return 0
 	var count := 0
 	for entry in (parsed as Array):
@@ -275,7 +285,7 @@ func _connect_configured_workers() -> int:
 			graph_model.add_node(_server_node_id(id), OrchestratorGraphModel.NodeType.SERVER, str(e.get("name", id)), _next_position())
 			count += 1
 	if count > 0:
-		_log_text("%d Worker aus %s konfiguriert (echter Transport)." % [count, WORKERS_PATH])
+		_log_text("%d Worker aus %s konfiguriert (echter Transport)." % [count, workers_path])
 	return count
 
 
@@ -353,7 +363,14 @@ func _build_ui() -> void:
 	split.add_child(_log)
 	split.split_offset = -170
 
-	_log_text("Orchestrator bereit. Knoten sind frei verschiebbar, der Graph ist speicher-/ladbar.")
+	# Entf-Taste löscht Knoten; Verbindungen sind direkt im Graphen editierbar.
+	# Ohne diese Handler ließ sich im Graphen nichts löschen und gezogene
+	# Verbindungen verschwanden beim nächsten Refresh wieder.
+	_graph.delete_nodes_request.connect(_on_delete_nodes)
+	_graph.connection_request.connect(_on_connection_request)
+	_graph.disconnection_request.connect(_on_disconnection_request)
+
+	_log_text("Orchestrator bereit. Knoten sind verschieb- und löschbar (Entf), Verbindungen per Ziehen.")
 
 
 func _add_button(parent: Control, text: String, cb: Callable) -> Button:
@@ -370,6 +387,11 @@ func _rebuild_graph() -> void:
 	_graph.clear_connections()
 	for child in _graph.get_children():
 		if child is GraphNode:
+			# Sterbende Knoten sofort umbenennen: Ihr Name bliebe sonst noch
+			# einen Frame belegt. Dadurch wurden beim Aktualisieren neue Knoten
+			# übersprungen („unsichtbar“) oder automatisch umbenannt und
+			# übereinander gestapelt.
+			child.name = "_dying_%d" % child.get_instance_id()
 			child.queue_free()
 
 	_add_graph_node(NODE_ROUTER, "Router", _position_of(NODE_ROUTER, Vector2(0, 40)), OrchestratorGraphModel.NodeType.ROUTER)
@@ -402,6 +424,9 @@ func _add_graph_node(node_name: String, title: String, position: Vector2, type: 
 	node.set_slot(0, true, 0, Color.WHITE, true, 0, Color.WHITE)
 	if type == OrchestratorGraphModel.NodeType.TASK:
 		node.add_theme_color_override("title_color", COL_TASK)
+	# Position nach dem Verschieben ins Modell schreiben, sonst geht sie beim
+	# nächsten Refresh verloren.
+	node.node_selected.connect(_on_node_position_changed.bind(node))
 	_graph.add_child(node)
 	if not graph_model.has_node(node_name):
 		graph_model.add_node(node_name, type, title, position)
@@ -633,12 +658,12 @@ func _demo_advance(now_ms: int) -> void:
 
 
 func _save_graph_dialog() -> void:
-	var err := save_graph(GRAPH_PATH)
-	_log_line("Graph gespeichert: %s (err=%d)" % [GRAPH_PATH, err])
+	var err := save_graph(graph_path)
+	_log_line("Graph gespeichert: %s (err=%d)" % [graph_path, err])
 
 
 func _load_graph_dialog() -> void:
-	if load_graph(GRAPH_PATH):
+	if load_graph(graph_path):
 		_log_line("Graph geladen.")
 	else:
 		_log_line("Kein gespeicherter Graph gefunden.")
@@ -653,14 +678,107 @@ func _task_node_id(id: String) -> String:
 	return "task_" + id.replace("-", "_")
 
 
+## Umkehrung von `_task_node_id`. Task-IDs sind UUIDs mit Bindestrichen;
+## Bindestriche werden zu Unterstrichen. UUIDs enthalten selbst keine
+## Unterstriche, daher ist die Umkehrung eindeutig.
+func _task_id_from_node(node_name: String) -> String:
+	return node_name.trim_prefix("task_").replace("_", "-")
+
+
+## Schreibt die aktuellen UI-Positionen aller Knoten ins Graph-Modell.
+func _save_dragged_positions() -> void:
+	for child in _graph.get_children():
+		var node := child as GraphNode
+		if node == null:
+			continue
+		var id := String(node.name)
+		if id.begins_with("_") or not graph_model.has_node(id):
+			continue
+		graph_model.set_position(id, node.position_offset)
+
+
 func _position_of(node_id: String, fallback: Vector2) -> Vector2:
 	if graph_model.has_node(node_id):
 		return graph_model.get_position(node_id)
-	return fallback + Vector2(_rng.randf_range(-30, 30), _rng.randf_range(-20, 20))
+	# Deterministischer Fallback (Hash aus der ID). Zuvor lagte der Zufall
+	# mehrere neue Server auf derselben Position – sie überlappten sich.
+	var h := node_id.hash()
+	return fallback + Vector2(40.0 * float(h % 5), 34.0 * float(h % 7))
 
 
 func _next_position() -> Vector2:
 	return Vector2(-330 + _rng.randf_range(-20, 20), 40 + 70 * graph_model.node_count())
+
+
+# ---------------------------------------------------------- Graph-Interaktion
+## Entf-Taste: markierte Knoten aus Modell und Manager entfernen. Der Router
+## ist der Kern des Graphen und bleibt geschützt.
+func _on_delete_nodes(nodes: Array[StringName]) -> void:
+	for raw in nodes:
+		var node_name := String(raw)
+		if node_name == NODE_ROUTER:
+			_log_line("Der Router kann nicht gelöscht werden.")
+			continue
+		if node_name.begins_with("task_"):
+			var task_id := _task_id_from_node(node_name)
+			if tasks.remove_task(task_id):
+				graph_model.remove_node(node_name)
+				_log_line("Task gelöscht: %s" % task_id)
+			else:
+				_log_line("Task konnte nicht gelöscht werden: %s" % task_id)
+			continue
+		if node_name.begins_with("server_"):
+			var server_id := node_name.trim_prefix("server_")
+			if transport.has_worker(server_id):
+				# Echter Worker: Verbindung schließen; der ServerManager-Eintrag
+				# wird dabei mit entfernt.
+				if transport.remove_worker(server_id):
+					graph_model.remove_node(node_name)
+					_log_line("Worker entfernt: %s" % server_id)
+				else:
+					_log_line("Worker konnte nicht entfernt werden: %s" % server_id)
+			else:
+				# Demo-/lokaler Server ohne Transportverbindung.
+				if servers.remove_server(server_id):
+					graph_model.remove_node(node_name)
+					_log_line("Server entfernt: %s" % server_id)
+				else:
+					_log_line("Server konnte nicht entfernt werden: %s" % server_id)
+		continue
+	refresh()
+
+
+## Neu gezogene Verbindung im Modell speichern (bleibt über Refresh/Speichern).
+func _on_connection_request(from_node: StringName, to_node: StringName,
+		_from_port: int, _to_port: int) -> void:
+	var from_id := String(from_node)
+	var to_id := String(to_node)
+	if from_id == to_id:
+		return
+	if graph_model.connect_nodes(from_id, to_id):
+		_graph.connect_node(from_id, 0, to_id, 0)
+		_log_line("Verbindung: %s → %s" % [from_id, to_id])
+	else:
+		_log_line("Verbindung nicht möglich: %s → %s" % [from_id, to_id])
+
+
+## Gelöste Verbindung auch aus dem Modell entfernen.
+func _on_disconnection_request(from_node: StringName, to_node: StringName,
+		_from_port: int, _to_port: int) -> void:
+	var from_id := String(from_node)
+	var to_id := String(to_node)
+	if graph_model.disconnect_nodes(from_id, to_id):
+		_graph.disconnect_node(from_id, 0, to_id, 0)
+		_log_line("Verbindung gelöst: %s → %s" % [from_id, to_id])
+
+
+## Verschobene Knoten merken, damit der nächste Refresh die Position hält
+## (vorher wurden Drag-Positionen verworfen und alles rückte wieder zusammen).
+func _on_node_position_changed(node: GraphNode) -> void:
+	var id := String(node.name)
+	if id.begins_with("_") or not graph_model.has_node(id):
+		return
+	graph_model.set_position(id, node.position_offset)
 
 
 func _log_text(text: String) -> void:

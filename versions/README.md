@@ -62,7 +62,8 @@ sha256sum -c versions/SHA256SUMS.txt
 
 | Version | Inhalt (Kurzform) | Notizen |
 |---|---|---|
-| **0.4.0** | **TLS in der Worker-App ab Werk** (wss, selbst erzeugtes Zertifikat, Anheften), Datei-Transfer in der Oberfläche, zwei echte Fehler behoben | [RELEASE_NOTES_0.4.0.md](RELEASE_NOTES_0.4.0.md) |
+| **0.4.1** | **Node-Editor funktional** (Löschen/Verschieben/Verbinden, keine unsichtbaren Knoten mehr), Syntax-Highlighting-Fix, Doku: LAN-Kabel-Direktverbindung | [RELEASE_NOTES_0.4.1.md](RELEASE_NOTES_0.4.1.md) |
+| 0.4.0 | **TLS in der Worker-App ab Werk** (wss, selbst erzeugtes Zertifikat, Anheften), Datei-Transfer in der Oberfläche, zwei echte Fehler behoben | [RELEASE_NOTES_0.4.0.md](RELEASE_NOTES_0.4.0.md) |
 | 0.3.0 | Datei-Transfer (Registry, Chunks, SHA-256, `WAITING_FOR_DATA`), Worker-Oberfläche mit Fortschrittsbalken, Sicherheits-/Stabilitätsprüfung. **Enthält den Fehler, dass „Aufgabe starten“ keine Aufgabe erzeugte** | [RELEASE_NOTES_0.3.0.md](RELEASE_NOTES_0.3.0.md) |
 | 0.2.0 | Cluster V1: LAN-Discovery, Worker-App, Code-/Projekt-Übertragung, Cython-Build | – |
 

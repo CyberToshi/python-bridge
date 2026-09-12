@@ -135,7 +135,11 @@ func _highlight_line(line_text: String, open_quote: String, regions: Dictionary)
 					i += 1
 			continue
 		# Numbers (full literal, see _scan_number).
-		if ch.is_valid_int() or (ch == "." and i + 1 < n and line_text[i + 1].is_valid_int()):
+		# A digit only starts a number if it is NOT part of an identifier
+		# (otherwise `x2` colored the `2` as a number mid-word).
+		var prev_is_ident := i > 0 and _is_ident_char(line_text[i - 1])
+		var digit_starts_number := ch.is_valid_int() and not prev_is_ident
+		if digit_starts_number or (ch == "." and not prev_is_ident and i + 1 < n and line_text[i + 1].is_valid_int()):
 			regions[i] = {"color": COL_NUMBER}
 			i = _scan_number(line_text, i)
 			continue
@@ -211,4 +215,6 @@ func _scan_number(line_text: String, start: int) -> int:
 	return i
 
 func _is_ident_char(c: String) -> bool:
-	return c == "_" or c.is_valid_identifier()
+	# Digits gehören zu Bezeichnern (`x2`, `a1b`), sonst endete der
+	# Bezeichner-Scan vor der Ziffer und die wurde als Zahl gefärbt.
+	return c == "_" or c.is_valid_identifier() or c.is_valid_int()

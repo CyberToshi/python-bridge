@@ -94,6 +94,9 @@ gesamte technische Infrastruktur dazwischen:</p>
 <ul>
 <li>Start, Überwachung und kontrolliertes Beenden von Python-Prozessen</li>
 <li>asynchrone WebSocket-Kommunikation (Godot blockiert nie auf Python)</li>
+<li>Parameter gehen als Werte an Python, Return-Werte kommen strukturiert
+zurück – bei großen Datenmengen als binäre Blöcke bzw. über Dateien
+(DataRefs), nicht über einen gemeinsamen RAM-Bereich</li>
 <li>strukturierte Ergebnisse und Fehler (Exception-Typ, Message, Traceback)</li>
 <li>Task-Verwaltung: Queue, Prioritäten, Timeouts, Retry, Batching</li>
 <li>Frame-Synchronisation: Antworten werden kontrolliert pro Frame abgearbeitet</li>
@@ -2083,7 +2086,8 @@ panel.manager.task_finished.connect(func(id: String, ok: bool, value: Variant, e
 Voraussetzung – Compiler, Cython, Docker, Zusatzpakete sind <strong>nicht</strong> nötig.</li>
 <li>Worker-Paket auf den Rechner kopieren: den Ordner
 <code>addons/python_bridge/orchestrator/worker/</code> (aus Addon-ZIP oder Repository)
-oder das fertige <code>PythonBridge-Worker-*.zip</code> aus <code>versions/</code> entpacken. Das
+oder das fertige <code>PythonBridge-Worker-*.zip</code> entpacken – aktuelle Version:
+<a href="https://github.com/CyberToshi/python-bridge/releases/latest">GitHub-Release</a>. Das
 Paket ist eigenständig – <strong>Godot und das Addon sind auf dem Client nicht
 nötig.</strong></li>
 <li>Starten:<ul>
@@ -2092,9 +2096,19 @@ nötig.</strong></li>
 </ul>
 </li>
 <li>Im Fenster auf <strong>Worker starten</strong> klicken.</li>
+<li>Wenn Windows beim ersten Start die Firewall-Frage zeigt: <strong>Zulassen</strong> für
+„Private Netzwerke“ – der Worker muss Aufgaben entgegennehmen dürfen.</li>
 </ol>
-<p>Fertig. Der Rechner meldet sich automatisch im Netz und erscheint auf dem
-Hauptrechner als Worker-Karte.</p>
+<p>Fertig, wenn das Fenster den <strong>grünen Punkt</strong> neben „Worker läuft“ zeigt. Der
+Rechner meldet sich automatisch im Netz und erscheint auf dem Hauptrechner als
+Worker-Karte.</p>
+<p>Beim <strong>ersten Verbindungsaufbau</strong> braucht TLS eine Freigabe: im Cluster-Fenster
+<strong>„Selbstsignierte Zertifikate erlauben“</strong> anhaken – oder sicherer das
+Zertifikat über den Knopf <strong>Zertifikat</strong> an der Worker-Karte anheften
+(<a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>). Die Karte zeigt danach
+„TLS, verschlüsselt“ bzw. „TLS, Zertifikat angeheftet und geprueft“.</p>
+<p>Kurz-Check, ob alles steht: Worker-Karte sichtbar → Zustand <strong>READY</strong> →
+kleine Aufgabe starten → Status <strong>COMPLETED</strong>.</p>
 
 <div class="adm adm-note"><p class="adm-title">Fehlt das Paket `websockets`?</p><p>Die Worker-App erkennt das selbst und bietet im Fenster den Knopf
 <strong>„websockets installieren“</strong> an. Ein Klick, kurz warten – kein Terminal nötig.</p>
@@ -2210,7 +2224,22 @@ Grenze überschritten, steht ein konkreter Satz mit Größe und Limit im
 Protokoll – kein stilles Scheitern.</p>
 <p>Übertragen wird <strong>eine Datei nach der anderen</strong>; die Fortschrittsbalken laufen
 deshalb nacheinander, nicht parallel.</p>
-<h2>5. Firewall</h2>
+<h2>5. Netzwerk und Firewall</h2>
+<p><strong>Zwei Varianten funktionieren ohne jede Einstellung:</strong></p>
+<ul>
+<li><strong>Über Router/WLAN</strong> – beide PCs im selben Netz, fertig.</li>
+<li><strong>LAN-Kabel direkt</strong> zwischen Hauptrechner und Client – moderne
+Netzwerkkarten verhandeln die Verbindung selbstständig (Auto-MDIX), beide
+Rechner bekommen automatisch Adressen (169.254.x.x, „Link-Local“). Windows
+zeigt an dieser Karte eventuell „Kein Internet“ – das ist hier korrekt und
+stört nicht: Die Discovery sendet an <code>255.255.255.255</code> und erreicht den
+direkt verbundenen Rechner dadurch immer.</li>
+</ul>
+<p>Nicht funktionieren Netze, die Rechner <strong>voneinander isolieren</strong>: Gast-WLANs
+mit AP-Isolation oder Netze, in denen ein VPN den Broadcast-Verkehr schluckt.
+Dann den Rechner von Hand eintragen (siehe unten) oder ein „normales“ Netz
+nutzen.</p>
+<p>Für die Firewall gilt:</p>
 <table>
 <thead>
 <tr>
@@ -2276,7 +2305,7 @@ und ist mit einem TLS-Worker gar nicht möglich (der Handshake scheitert).</li>
 </thead>
 <tbody><tr>
 <td>Kein Rechner erscheint</td>
-<td>Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Log steht „Discovery aktiv“, sobald die Meldungen rausgehen („Discovery inaktiv“ nennt sonst den Grund).</td>
+<td>Client-App läuft nicht, oder die Firewall blockt UDP 8766. Bei WLAN: Gastnetz/AP-Isolation prüfen. Im Worker-Log steht „Discovery aktiv“, sobald die Meldungen rausgehen („Discovery inaktiv“ nennt sonst den Grund).</td>
 </tr>
 <tr>
 <td>Rechner erscheint, bleibt aber grau/rot</td>
@@ -2327,7 +2356,9 @@ Workers ein – wird eines nicht gefunden, bricht der Worker bewusst mit einer
 klaren Meldung ab.</p>
 <h2>8. Grenzen dieser Ausbaustufe</h2>
 <ul>
-<li><strong>Discovery nur im eigenen LAN</strong> (UDP-Broadcast).</li>
+<li><strong>Discovery nur im eigenen Netz-Segment</strong> (UDP-Broadcast) – funktioniert
+über Router/WLAN genauso wie über ein <strong>direktes LAN-Kabel</strong> zwischen zwei
+PCs.</li>
 <li><strong>Keine Router-Konfiguration, kein Portforwarding, kein Docker, kein VPN</strong> –
 dafür bewusst verschlüsselt (<code>wss://</code>) und mit Token-Pflicht.</li>
 <li><strong>Keine Sandbox</strong> für übertragenen Code – auf Clients nur Worker verbinden

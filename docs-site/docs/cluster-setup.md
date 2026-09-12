@@ -53,16 +53,29 @@ Auf jedem mitrechnenden PC einmalig:
    Voraussetzung – Compiler, Cython, Docker, Zusatzpakete sind **nicht** nötig.
 2. Worker-Paket auf den Rechner kopieren: den Ordner
    `addons/python_bridge/orchestrator/worker/` (aus Addon-ZIP oder Repository)
-   oder das fertige `PythonBridge-Worker-*.zip` aus `versions/` entpacken. Das
+   oder das fertige `PythonBridge-Worker-*.zip` entpacken – aktuelle Version:
+   [GitHub-Release](https://github.com/CyberToshi/python-bridge/releases/latest). Das
    Paket ist eigenständig – **Godot und das Addon sind auf dem Client nicht
    nötig.**
 3. Starten:
    * **Windows:** Doppelklick auf `Worker-Windows.bat`
    * **Linux:** `./start_worker_linux.sh`
 4. Im Fenster auf **Worker starten** klicken.
+5. Wenn Windows beim ersten Start die Firewall-Frage zeigt: **Zulassen** für
+   „Private Netzwerke“ – der Worker muss Aufgaben entgegennehmen dürfen.
 
-Fertig. Der Rechner meldet sich automatisch im Netz und erscheint auf dem
-Hauptrechner als Worker-Karte.
+Fertig, wenn das Fenster den **grünen Punkt** neben „Worker läuft“ zeigt. Der
+Rechner meldet sich automatisch im Netz und erscheint auf dem Hauptrechner als
+Worker-Karte.
+
+Beim **ersten Verbindungsaufbau** braucht TLS eine Freigabe: im Cluster-Fenster
+**„Selbstsignierte Zertifikate erlauben“** anhaken – oder sicherer das
+Zertifikat über den Knopf **Zertifikat** an der Worker-Karte anheften
+([Cluster-Sicherheit](./cluster-sicherheit)). Die Karte zeigt danach
+„TLS, verschlüsselt“ bzw. „TLS, Zertifikat angeheftet und geprueft“.
+
+Kurz-Check, ob alles steht: Worker-Karte sichtbar → Zustand **READY** →
+kleine Aufgabe starten → Status **COMPLETED**.
 
 :::note Fehlt das Paket `websockets`?
 Die Worker-App erkennt das selbst und bietet im Fenster den Knopf
@@ -154,7 +167,24 @@ Protokoll – kein stilles Scheitern.
 Übertragen wird **eine Datei nach der anderen**; die Fortschrittsbalken laufen
 deshalb nacheinander, nicht parallel.
 
-## 5. Firewall
+## 5. Netzwerk und Firewall
+
+**Zwei Varianten funktionieren ohne jede Einstellung:**
+
+* **Über Router/WLAN** – beide PCs im selben Netz, fertig.
+* **LAN-Kabel direkt** zwischen Hauptrechner und Client – moderne
+  Netzwerkkarten verhandeln die Verbindung selbstständig (Auto-MDIX), beide
+  Rechner bekommen automatisch Adressen (169.254.x.x, „Link-Local“). Windows
+  zeigt an dieser Karte eventuell „Kein Internet“ – das ist hier korrekt und
+  stört nicht: Die Discovery sendet an `255.255.255.255` und erreicht den
+  direkt verbundenen Rechner dadurch immer.
+
+Nicht funktionieren Netze, die Rechner **voneinander isolieren**: Gast-WLANs
+mit AP-Isolation oder Netze, in denen ein VPN den Broadcast-Verkehr schluckt.
+Dann den Rechner von Hand eintragen (siehe unten) oder ein „normales“ Netz
+nutzen.
+
+Für die Firewall gilt:
 
 | Rechner | Richtung | Protokoll | Port | Wofür |
 |---|---|---|---|---|
@@ -184,7 +214,7 @@ Worker-App. Wichtig ist das Schema – die Adresse wird **wörtlich** genommen:
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| Kein Rechner erscheint | Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Log steht „Discovery aktiv“, sobald die Meldungen rausgehen („Discovery inaktiv“ nennt sonst den Grund). |
+| Kein Rechner erscheint | Client-App läuft nicht, oder die Firewall blockt UDP 8766. Bei WLAN: Gastnetz/AP-Isolation prüfen. Im Worker-Log steht „Discovery aktiv“, sobald die Meldungen rausgehen („Discovery inaktiv“ nennt sonst den Grund). |
 | Rechner erscheint, bleibt aber grau/rot | TCP 8765 geblockt, falsches Token, oder die automatische Kopplung ist abgeschaltet. Token an der Worker-Karte nachtragen (Knopf **Token**). |
 | „TLS-Handshake … fehlgeschlagen“ | Absicht: der Worker läuft verschlüsselt mit eigenem Zertifikat. Häkchen **Selbstsignierte Zertifikate erlauben** setzen oder das Zertifikat anheften – [Cluster-Sicherheit](./cluster-sicherheit). |
 | Aufgabe bleibt `QUEUED` | Kein Rechner verbunden oder alle im Capacity Gate gesperrt. Metriken im Panel ansehen. |
@@ -212,7 +242,9 @@ klaren Meldung ab.
 
 ## 8. Grenzen dieser Ausbaustufe
 
-* **Discovery nur im eigenen LAN** (UDP-Broadcast).
+* **Discovery nur im eigenen Netz-Segment** (UDP-Broadcast) – funktioniert
+  über Router/WLAN genauso wie über ein **direktes LAN-Kabel** zwischen zwei
+  PCs.
 * **Keine Router-Konfiguration, kein Portforwarding, kein Docker, kein VPN** –
   dafür bewusst verschlüsselt (`wss://`) und mit Token-Pflicht.
 * **Keine Sandbox** für übertragenen Code – auf Clients nur Worker verbinden
