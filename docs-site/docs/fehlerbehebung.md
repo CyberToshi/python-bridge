@@ -100,8 +100,27 @@ if result.is_error():
 | Kein Port in `tmp/default.json` | Server startet nicht | Prozessstart-Fehler im Output; `python_executable` prüfen |
 | Instanz startet im Kreis (`crashed` → `restarting`) | Prozess stirbt sofort | Fehlermeldung der Instanz lesen (`instance_status`); meist Python-/venv-Problem |
 
+## Cluster & Worker (andere PCs)
+
+| Symptom | Ursache | Lösung |
+|---|---|---|
+| Kein Rechner erscheint | Client-App läuft nicht, oder Firewall blockt UDP 8766 | Worker-App starten; „Discovery aktiv“ muss im Worker-Log stehen ([Cluster aufsetzen](./cluster-setup)) |
+| Rechner gefunden, verbindet aber nicht | TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus | Token an der Worker-Karte nachtragen |
+| „TLS-Handshake … fehlgeschlagen“ | Selbstsigniertes Zertifikat ohne Freigabe (Absicht, kein stiller Klartext-Rückfall) | Häkchen *Selbstsignierte Zertifikate erlauben* setzen oder `worker-cert.pem` anheften ([Cluster-Sicherheit](./cluster-sicherheit)) |
+| Karte zeigt „TLS, verschlüsselt (Zertifikat nicht geprüft)“ | Freigabe statt Anheften aktiv | Für echte Prüfung das Zertifikat anheften |
+| Fingerabdrücke stimmen nicht überein | Anderer Rechner oder Zertifikat wurde neu erzeugt (z. B. nach Löschen des Cache) | Zertifikat im Manager neu anheften |
+| Worker meldet „TLS nicht einsatzbereit“ und startet nicht | `--tls-cert`/`--tls-key` unvollständig oder unlesbar | Beide Dateien angeben oder auf das automatische Zertifikat umstellen |
+| Aufgabe bleibt `QUEUED` | Kein Rechner verbunden oder alle im Capacity Gate gesperrt (CPU/RAM/Queue) | Metriken im Cluster-Fenster ansehen |
+| Aufgabe zeigt „Daten werden übertragen“ | Eingabedatei ist noch unterwegs (`WAITING_FOR_DATA`) | Abwarten – das ist der normale Zustand, kein Fehler |
+| „Datei ist zu gross“ / „Datei-Cache des Workers ist voll“ | Grenzen der Worker-App | `--max-file-mb` / `--max-cache-mb` erhöhen oder Cache leeren |
+| „Prüfsumme stimmt nicht (SHA-256)“ | Netzwerk oder Platte fehlerhaft | Der Transfer wird begrenzt wiederholt und dann sauber abgebrochen; Protokoll lesen |
+| Cython-Aufgabe schlägt fehl | Kein C-Compiler / Paket fehlt | In der Worker-App **„Umgebung prüfen“** – zeigt Klartext plus Installationshinweis |
+| Build läuft jedes Mal neu | Projektordner ändert sich bei jedem Start (z. B. Zeitstempel im Code) | Cache greift dann absichtlich nicht; Zufallswerte aus dem Code nehmen |
+| Worker verschwindet nach kurzer Zeit | App geschlossen oder Standby | Neu starten; der Manager verbindet selbst wieder und holt offene Aufgaben nach |
+| Nur Gastnetz / AP-Isolation (kein Broadcast) | Discovery kommt nicht durch | Adresse im Cluster-Fenster von Hand eintragen: `wss://<ip>:8765` + Token |
+
 ## Noch Fragen?
 
 Die vollständigen Konzepte: [Python-Seite verstehen](./python-seite) ·
 [Große Daten](./datenebene) · [Konfiguration](./konfiguration) ·
-[API-Referenz](./api)
+[Cluster](./cluster) · [API-Referenz](./api)

@@ -56,7 +56,7 @@
 <header class="cover">
   <h1>Python Bridge</h1>
   <p class="subtitle">Vollständige Addon-Dokumentation – Python natürlich in Godot 4 integrieren</p>
-  <p class="meta">Stand: 2026-09-11 · Online: <a href="https://cybertoshi.github.io/python-bridge/">cybertoshi.github.io/python-bridge</a></p>
+  <p class="meta">Stand: 2026-09-12 · Online: <a href="https://cybertoshi.github.io/python-bridge/">cybertoshi.github.io/python-bridge</a></p>
   <p class="hint">Tipp: Über die Druckfunktion des Browsers (Strg/Cmd + P) als PDF speichern. Seitenumbrüche sind gesetzt.</p>
 </header>
 <nav class="toc">
@@ -69,6 +69,9 @@
 <li><a href="#konfiguration">Konfiguration</a></li>
 <li><a href="#python-seite">Python-Seite verstehen</a></li>
 <li><a href="#datenebene">Daten, Typen &amp; große Datensätze</a></li>
+<li><a href="#cluster">Cluster – Aufgaben auf andere PCs verteilen</a></li>
+<li><a href="#cluster-setup">Cluster aufsetzen</a></li>
+<li><a href="#cluster-sicherheit">Cluster-Sicherheit (Token &amp; TLS)</a></li>
 <li><a href="#api">API-Referenz</a></li>
 <li><a href="#api-tasks">Tasks &amp; Scheduling</a></li>
 <li><a href="#api-data">Daten &amp; Serialisierung</a></li>
@@ -100,6 +103,9 @@ gesamte technische Infrastruktur dazwischen:</p>
 <li>Python-Editor-Dock direkt im Godot-Editor</li>
 <li>optionale automatische GDScript-Wrapper</li>
 <li>DataRefs plus binärer bzw. dateibasierter Transport für große Daten</li>
+<li><strong>Cluster</strong>: Aufgaben auf andere PCs im LAN verteilen (Discovery,
+verschlüsselte Verbindung, Datei-Transfer, Ausfallbehandlung) – siehe
+<a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a></li>
 </ul>
 <h2>Die wichtigste Regel</h2>
 <blockquote>
@@ -177,6 +183,8 @@ normale Python-Datei</strong>: Du kannst sie außerhalb von Godot mit jedem Pyth
 </tbody></table>
 <h2>Was du damit bauen kannst</h2>
 <ul>
+<li><strong>verteiltes Rechnen</strong>: viele Aufgaben auf mehrere PCs im LAN verteilen
+(<a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a>)</li>
 <li>numerische Berechnungen und Simulationen</li>
 <li>Datenaufbereitung, Data Engineering</li>
 <li>KI-/ML-Workflows (NumPy, PyTorch, …)</li>
@@ -230,6 +238,11 @@ Datei-Transport). Details und Prüfbefehle: <a href="https://cybertoshi.github.i
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/konfiguration">Konfiguration</a> – alle Einstellungen erklärt</li>
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/python-seite">Python-Seite verstehen</a> – was in Python passiert</li>
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/datenebene">Große Daten (DataRefs)</a> – Data-Plane</li>
+<li><a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a> – Aufgaben auf andere PCs verteilen<ul>
+<li><a href="https://cybertoshi.github.io/python-bridge/docs/cluster-setup">Cluster aufsetzen</a> – Hauptrechner und Client verbinden</li>
+<li><a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a> – Token, TLS, Fingerabdruck</li>
+</ul>
+</li>
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/api">API-Referenz</a> – jede Funktion dokumentiert<ul>
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/api-tasks">Tasks &amp; Scheduling</a></li>
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/api-data">Daten &amp; Serialisierung</a></li>
@@ -240,10 +253,9 @@ Datei-Transport). Details und Prüfbefehle: <a href="https://cybertoshi.github.i
 <li><a href="https://cybertoshi.github.io/python-bridge/docs/fehlerbehebung">Fehlerbehebung</a> – Probleme und Fehlercodes</li>
 </ol>
 <p>Ausblick (bewusst getrennt): ein zweiter, geplanter Pfad für sehr große
-lokale Daten über Shared Memory (<a href="https://cybertoshi.github.io/python-bridge/docs/hochleistungspfade">Kommunikationspfade</a>)
-und die konzeptionell vorbereitete Cluster-Verteilung
-(<a href="https://github.com/CyberToshi/python-bridge/blob/main/docs/CLUSTER_INTEGRATION_PLAN.md"><code>docs/CLUSTER_INTEGRATION_PLAN.md</code></a>)
-– beides ist noch nicht Teil des verifizierten Standardwegs.</p>
+lokale Daten über Shared Memory
+(<a href="https://cybertoshi.github.io/python-bridge/docs/hochleistungspfade">Kommunikationspfade</a>) – noch nicht Teil des
+verifizierten Standardwegs.</p>
 <p>Für den ausführlichen manuellen Workflow (welcher Node, welcher Code,
 Schritt für Schritt) liegt im Repository der
 <a href="https://github.com/CyberToshi/python-bridge/blob/main/docs/HANDS_ON_CONNECT_GUIDE.md">HANDS-ON-Connect-Guide</a>
@@ -1619,6 +1631,478 @@ deinen Anwendungsfall anpassen (<a href="https://cybertoshi.github.io/python-bri
 abgelehnt (<code>TASK_ERROR</code>).</p>
 <p>Verwandt: <a href="https://cybertoshi.github.io/python-bridge/docs/python-seite">Python-Seite verstehen</a> · <a href="https://cybertoshi.github.io/python-bridge/docs/api">API-Referenz</a> ·
 <a href="https://cybertoshi.github.io/python-bridge/docs/konfiguration">Konfiguration</a></p>
+
+</section>
+<section id="cluster" class="chapter">
+<h1>Cluster – Aufgaben auf andere PCs verteilen</h1>
+<p>Die Python Bridge führt Python <strong>lokal</strong> in Godot aus. Das <strong>Cluster-Modul</strong>
+setzt eine Ebene darüber: dieselben Python-Aufgaben laufen statt auf dem
+Hauptrechner auf einem <strong>anderen PC im selben LAN</strong> – ohne Docker, ohne VPN,
+ohne Router-Konfiguration und ohne dass auf dem Client-Rechner ein Terminal
+geöffnet werden muss.</p>
+<pre><code class="language-text">Godot + ClusterPanel                      Client-Rechner
+(Du klickst „Aufgabe starten“)            (Worker-App, Doppelklick-Start)
+        │                                          │
+        │◄────── Discovery per UDP-Broadcast ──────┤   „ich bin da“
+        │                                          │
+        ├──────── Auftrag + Python-Code ──────────►│   Code ankommen
+        │         (verschlüsselt, wss://)          │   Projekt bauen
+        │◄──────── Status, Fortschritt, Ergebnis ──┤   Ergebnis zurück
+</code></pre>
+<h2>Die zentrale Definition</h2>
+<blockquote>
+<p>Das Cluster-Modul ist <strong>kein neues Python-System</strong>. Es ist ein <strong>visueller
+Task- und Daten-Orchestrator für die bestehende Bridge.</strong></p>
+</blockquote>
+<p>Python-Aufgaben bleiben normale Python-Aufgaben. Das Modul entscheidet nur:</p>
+<ol>
+<li><strong>Wo</strong> läuft die Aufgabe (welcher Rechner ist verfügbar, hat Kapazität und
+die nötigen Daten)?</li>
+<li><strong>Welche Dateien</strong> braucht dieser Rechner dafür, und liegen sie schon dort?</li>
+<li><strong>Wann</strong> darf gestartet werden (erst wenn die Daten geprüft vorliegen)?</li>
+<li><strong>Was passiert bei einem Ausfall</strong> (Aufgabe neu bewerten, nicht verlieren)?</li>
+</ol>
+<p>Der Code läuft weiterhin in einem normalen Python-Prozess – auf einem anderen
+Rechner statt auf deinem.</p>
+<h2>Die zwei Rollen</h2>
+<table>
+<thead>
+<tr>
+<th>Rolle</th>
+<th>Rechner</th>
+<th>Was läuft dort</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Manager</strong></td>
+<td>der Hauptrechner</td>
+<td>Godot mit dem Addon, Node <code>ClusterPanel</code> (dunkle Oberfläche)</td>
+</tr>
+<tr>
+<td><strong>Worker</strong></td>
+<td>jeder weitere PC</td>
+<td>die Worker-App <code>worker_app.py</code> (Doppelklick, eigenes Fenster)</td>
+</tr>
+</tbody></table>
+<p>Die Worker-App ist ein <strong>eigenes kleines Programm</strong> im Addon
+(<code>addons/python_bridge/orchestrator/worker/</code>). Sie erzeugt ihr Token selbst,
+startet den Worker-Prozess und zeigt Status, Log, Aufgabenkarten mit
+Fortschrittsbalken und die Diagnose.</p>
+<h2>So ist es in Godot eingebunden</h2>
+<p>Das Cluster-Modul ist ein <strong>Node</strong>, kein Fremdprogramm. Eine Szene mit
+<code>ClusterPanel</code> genügt – der Panel bringt seinen eigenen <code>ClusterManager</code> mit:</p>
+<pre><code class="language-text">ClusterPanel (Control)                 ← fertige Oberfläche (cluster_main.tscn)
+└── ClusterManager (Node)
+    ├── Worker(s)     automatisch erkannt + verbunden
+    ├── Task(s)       Python-Aufgaben inkl. Zustandsautomat
+    └── Scheduler     Router + Dispatcher + Transport
+</code></pre>
+<p>Wer keine Oberfläche braucht, benutzt den Manager direkt:</p>
+<pre><code class="language-gdscript">var cluster := ClusterManager.new()
+add_child(cluster)
+cluster.task_finished.connect(func(task_id: String, ok: bool, value: Variant, error: String) -&gt; void:
+    print(task_id, &quot; → &quot;, ok, &quot; &quot;, value, &quot; &quot;, error))
+
+# Aufgabe mit übertragenem Python-Code (auf dem Worker liegt keine Datei)
+cluster.submit_script(&quot;mein_lauf&quot;, {
+    &quot;command&quot;: &quot;run&quot;,
+    &quot;input&quot;: {&quot;werte&quot;: [1, 2, 3]},
+    &quot;source&quot;: &quot;result = sum(input[&#39;werte&#39;])&quot;,
+})
+</code></pre>
+<h2>Was das Modul übernimmt</h2>
+<table>
+<thead>
+<tr>
+<th>Baustein</th>
+<th>Aufgabe</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>LAN-Discovery</strong></td>
+<td>UDP-Broadcast: Rechner finden sich selbst. Keine IP, kein Port zum Eintippen.</td>
+</tr>
+<tr>
+<td><strong>Worker-Transport</strong></td>
+<td>WebSocket-Verbindung pro Rechner (<code>wss://</code>), Heartbeat, automatische Wiederverbindung.</td>
+</tr>
+<tr>
+<td><strong>Capacity Gate</strong></td>
+<td>Ein Rechner nimmt nur so viele Aufgaben an, wie seine Grenzen (CPU/RAM/Queue) zulassen – mit Hysterese, damit der Zustand nicht flattert.</td>
+</tr>
+<tr>
+<td><strong>Router</strong></td>
+<td>Wählt den passenden Rechner: verfügbar + Kapazität + Ressourcen + <strong>Daten schon da</strong> (Data Locality).</td>
+</tr>
+<tr>
+<td><strong>Task-Zustandsautomat</strong></td>
+<td><code>CREATED → QUEUED → ASSIGNED → WAITING_FOR_DATA → RUNNING → COMPLETED/FAILED/RETRYING/CANCELLED</code>.</td>
+</tr>
+<tr>
+<td><strong>ACK &amp; Wiederzuweisung</strong></td>
+<td>Ein Auftrag gilt erst nach Quittung als übertragen. Fällt ein Rechner aus, werden betroffene Aufgaben neu bewertet – abgeschlossene <strong>nicht</strong> wiederholt.</td>
+</tr>
+<tr>
+<td><strong>Datei-Registry + Chunk-Transfer</strong></td>
+<td>Große Eingaben werden inhaltsadressiert (SHA-256), in 256-KB-Stücken übertragen und <strong>vor</strong> dem Start geprüft. Schon vorhandene Dateien werden nicht erneut geschickt.</td>
+</tr>
+<tr>
+<td><strong>Projekte mit Build</strong></td>
+<td>Enthält der Ordner <code>.pyx</code> oder <code>requirements.txt</code>, legt der Worker eine isolierte Umgebung an, installiert und kompiliert – im Cache, damit der zweite Lauf sofort startet.</td>
+</tr>
+<tr>
+<td><strong>TLS</strong></td>
+<td>Standardmäßig verschlüsselt; Zertifikat entsteht automatisch. Siehe <a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>.</td>
+</tr>
+<tr>
+<td><strong>Monitoring</strong></td>
+<td>CPU, RAM, GPU (optional), Latenz, Queue, aktive Aufgaben – pro Rechner in der Oberfläche.</td>
+</tr>
+</tbody></table>
+<h2>Bewusst <em>nicht</em> enthalten</h2>
+<ul>
+<li>Kein virtuelles Netzwerk, kein Docker, keine Router- oder Portfreigaben.</li>
+<li>Kein Ersatz für die lokale Instanz: die normale
+<a href="https://cybertoshi.github.io/python-bridge/docs/getting-started">Python Bridge</a> arbeitet unverändert weiter.</li>
+<li>Keine Sandbox: übertragener Code läuft mit den Rechten des Worker-Benutzers.</li>
+<li>Kein Fairness-/Prioritätssystem über mehrere Hauptrechner – ein Manager
+steuert, mehrere Rechner rechnen.</li>
+</ul>
+<h2>Weiterlesen</h2>
+<ol>
+<li><a href="https://cybertoshi.github.io/python-bridge/docs/cluster-setup">Cluster aufsetzen</a> – Hauptrechner und Client in 5 Minuten</li>
+<li><a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a> – Token, TLS, Fingerabdruck</li>
+<li><a href="https://cybertoshi.github.io/python-bridge/docs/fehlerbehebung">Fehlerbehebung</a> – auch für Cluster und TLS</li>
+</ol>
+
+<div class="adm adm-tip"><p class="adm-title">Ausführliche Fassungen im Repository</p><p>Im Addon liegen zusätzlich:</p>
+<ul>
+<li><code>addons/python_bridge/orchestrator/CLUSTER_V1_SETUP.md</code> – Aufsetzen mit
+Firewall-Tabelle und Fehlersuche</li>
+<li><code>addons/python_bridge/orchestrator/SAFETY.md</code> – Sicherheitsprüfung, Funde,
+Grenzen</li>
+<li><code>addons/python_bridge/orchestrator/CYTHON_AND_BUILD.md</code> – Build-Schritte,
+Umgebungen und Cache im Detail</li>
+</ul>
+</div>
+
+</section>
+<section id="cluster-setup" class="chapter">
+<h1>Cluster aufsetzen</h1>
+<p>Für den Aufbau gibt es genau zwei Schritte: <strong>Hauptrechner starten</strong>,
+<strong>Client-App starten</strong>. Alles andere (Suchen, Verbinden, Code übertragen,
+Ergebnisse zurückholen) erledigt das System selbst.</p>
+<h2>1. Hauptrechner einrichten</h2>
+<p>Das Addon reicht – es ist dieselbe Installation wie bei der lokalen Bridge
+(<a href="https://cybertoshi.github.io/python-bridge/docs/installation">Installation</a>). Zwei Wege zur Oberfläche:</p>
+<h3>Variante A – fertige Oberfläche starten (schnellster Test)</h3>
+<p>Szene <code>addons/python_bridge/cluster/cluster_main.tscn</code> öffnen und <strong>F6</strong>
+drücken. Es öffnet sich die dunkle Cluster-Oberfläche mit Protokoll und
+Rechner-Karten.</p>
+<h3>Variante B – in die eigene Szene einbauen</h3>
+<p><code>cluster_panel.gd</code> auf ein <code>Control</code> legen (oder per Code):</p>
+<pre><code class="language-gdscript">extends Control
+
+const ClusterPanel := preload(&quot;res://addons/python_bridge/cluster/cluster_panel.gd&quot;)
+
+func _ready() -&gt; void:
+    var panel := ClusterPanel.new()
+    panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+    add_child(panel)   # bringt seinen ClusterManager selbst mit
+</code></pre>
+<p>Fertige Signale des Managers:</p>
+<pre><code class="language-gdscript">panel.manager.worker_connected.connect(func(id: String) -&gt; void: print(&quot;dabei: &quot;, id))
+panel.manager.task_finished.connect(func(id: String, ok: bool, value: Variant, err: String) -&gt; void:
+    print(&quot;fertig: &quot;, id, &quot; ok=&quot;, ok, &quot; -&gt; &quot;, value))
+</code></pre>
+<h2>2. Client-Rechner einrichten</h2>
+<p>Auf jedem mitrechnenden PC einmalig:</p>
+<ol>
+<li><strong>Python installieren</strong>, falls noch nicht vorhanden (unter Linux zusätzlich
+<code>python3-tk</code>, sonst startet die Oberfläche nicht). Das ist die einzige
+Voraussetzung – Compiler, Cython, Docker, Zusatzpakete sind <strong>nicht</strong> nötig.</li>
+<li>Addon-Ordner aus dem Addon-ZIP bzw. dem Repository auf den Rechner kopieren
+(<code>addons/python_bridge/orchestrator/worker/</code>) – oder das fertige
+<code>PythonBridge-Worker-*.zip</code> entpacken.</li>
+<li>Starten:<ul>
+<li><strong>Windows:</strong> Doppelklick auf <code>Worker-Windows.bat</code></li>
+<li><strong>Linux:</strong> <code>./start_worker_linux.sh</code></li>
+</ul>
+</li>
+<li>Im Fenster auf <strong>Worker starten</strong> klicken.</li>
+</ol>
+<p>Fertig. Der Rechner meldet sich automatisch im Netz und erscheint auf dem
+Hauptrechner als Worker-Karte.</p>
+
+<div class="adm adm-note"><p class="adm-title">Fehlt das Paket `websockets`?</p><p>Die Worker-App erkennt das selbst und bietet im Fenster den Knopf
+<strong>„websockets installieren“</strong> an. Ein Klick, kurz warten – kein Terminal nötig.</p>
+</div>
+<h2>3. Aufgaben starten</h2>
+<p>Im Cluster-Fenster:</p>
+<ol>
+<li><strong>Datei</strong> oder <strong>Projektordner</strong> wählen (Rechtsklick-frei, zwei Knöpfe).</li>
+<li>Optional <strong>Eingabedateien</strong> über den Knopf <strong>Dateien</strong> anhängen – die
+Anzeige daneben nennt Anzahl und Gesamtgröße.</li>
+<li>Ausführungsart wählen:<ul>
+<li><code>run</code> – der Code liest <code>input</code> und setzt <code>result</code></li>
+<li><code>call</code> – eine Funktion im Skript wird mit Argumenten aufgerufen</li>
+</ul>
+</li>
+<li>Optional Ziel-Rechner wählen („Automatisch“ = der Router entscheidet).</li>
+<li><strong>Aufgabe starten</strong>.</li>
+</ol>
+<p>Die Tabelle zeigt danach: Status, Fortschritt (<code>env</code>, <code>build</code>, <code>run</code> bzw.
+„Daten werden übertragen“), Rechner, Versuch, Build (<code>neu gebaut</code> / <code>Cache</code>)
+und Ergebnis.</p>
+<h3>Der Ablauf im Hintergrund</h3>
+<pre><code class="language-text">Task anlegen
+      │
+Router wählt Rechner  ──►  Dateien dort schon vorhanden?
+      │                          ├─ ja  → kein Transfer
+      │                          └─ nein→ Chunk-Transfer + SHA-256-Prüfung
+      │                                    (Task steht auf WAITING_FOR_DATA)
+      ▼
+Auftrag + Python-Code per wss:// zum Worker
+      │
+Worker: Arbeitsverzeichnis anlegen · Umgebung/Build (bei Bedarf) · ausführen
+      ▼
+Status, Fortschritt und Ergebnis zurück → Task COMPLETED
+</code></pre>
+<h2>4. Große Eingabedateien</h2>
+<p>Dateien sind kein Anhang der Nachricht, sondern Teil der Orchestrierung:</p>
+<ul>
+<li>erkannt über den <strong>Inhalt</strong> (<code>file_id = SHA-256</code>), nicht über den Pfad,</li>
+<li>übertragen in <strong>256-KB-Stücken</strong>, jedes Stück quittiert,</li>
+<li><strong>vor</strong> dem Start der Aufgabe auf dem Zielrechner geprüft; erst dann wird
+der Auftrag verschickt,</li>
+<li>ist die Datei schon vorhanden (auch von einem früheren Lauf), findet <strong>kein</strong>
+Transfer statt,</li>
+<li>im Programm liegen die Dateien im Arbeitsverzeichnis und zusätzlich benannt:</li>
+</ul>
+<pre><code class="language-python">name = (input or {}).get(&quot;_files&quot;, [&quot;daten.dat&quot;])[0]
+data = open(name, &quot;rb&quot;).read()
+</code></pre>
+<p>Grenzen (in der Worker-App einstellbar): <strong>Größe pro Datei</strong> (Standard 512 MB)
+und <strong>Datei-Cache gesamt</strong> (Standard 4 GB). Wird eine Grenze überschritten,
+steht im Protokoll ein konkreter Satz – kein stilles Scheitern.</p>
+<h2>5. Firewall</h2>
+<table>
+<thead>
+<tr>
+<th>Richtung</th>
+<th>Protokoll</th>
+<th>Port</th>
+<th>Wofür</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Client → Netz</td>
+<td>UDP (Broadcast)</td>
+<td><strong>8766</strong></td>
+<td>Discovery („ich bin da“)</td>
+</tr>
+<tr>
+<td>Manager → Client</td>
+<td>TCP</td>
+<td><strong>8765</strong></td>
+<td>Aufgaben, Dateien, Ergebnisse</td>
+</tr>
+</tbody></table>
+<p>Auf dem <strong>Client-Rechner</strong> eingehend erlauben: UDP 8766 und TCP 8765. Windows
+fragt beim ersten Start selbst – „Private Netzwerke“ genügt.</p>
+<p>Klappt kein Broadcast (Gastnetz, AP-Isolation), trägt man den Rechner im
+Cluster-Fenster einmal von Hand ein: <code>wss://&lt;ip&gt;:8765</code> plus Token aus der
+Worker-App.</p>
+<h2>6. Fehlersuche</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Ursache / Lösung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Kein Rechner erscheint</td>
+<td>Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Fenster steht „Discovery aktiv“, wenn die Meldung rausgeht.</td>
+</tr>
+<tr>
+<td>Rechner erscheint, bleibt aber grau/rot</td>
+<td>TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus. Token an der Worker-Karte nachtragen.</td>
+</tr>
+<tr>
+<td>„TLS-Handshake … fehlgeschlagen“</td>
+<td>Absicht: der Worker läuft verschlüsselt mit eigenem Zertifikat. Häkchen <strong>Selbstsignierte Zertifikate erlauben</strong> setzen oder das Zertifikat anheften – <a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>.</td>
+</tr>
+<tr>
+<td>Aufgabe bleibt <code>QUEUED</code></td>
+<td>Kein Rechner verbunden oder alle im Capacity Gate gesperrt. Metriken im Panel ansehen.</td>
+</tr>
+<tr>
+<td>Aufgabe steht auf „Daten werden übertragen“</td>
+<td>Die Eingabedatei ist noch unterwegs – das ist der normale Zustand, kein Fehler.</td>
+</tr>
+<tr>
+<td>Cython-Aufgabe schlägt fehl</td>
+<td>In der Worker-App <strong>„Umgebung prüfen“</strong> drücken: sie zeigt in Klartext, ob Python, pip, venv und ein C-Compiler vorhanden sind.</td>
+</tr>
+<tr>
+<td>Aufgabe <code>FAILED</code></td>
+<td>Fehlermeldung in der Tabelle; Maus über die Ergebniszelle zeigt den Lösungshinweis des Workers.</td>
+</tr>
+<tr>
+<td>Worker verschwindet</td>
+<td>App geschlossen oder Standby. Einfach neu starten – der Manager verbindet selbst wieder.</td>
+</tr>
+</tbody></table>
+<h2>7. Optional: eigenständiges Programm bauen</h2>
+<p>Wer auf den Clients <strong>kein Python</strong> installieren will, packt die App:</p>
+<pre><code class="language-bash">cd addons/python_bridge/orchestrator/worker
+python -m pip install pyinstaller
+pyinstaller --noconfirm worker.spec     # -&gt; dist/Worker.exe bzw. dist/Worker
+</code></pre>
+<p>Der Build muss auf dem jeweiligen Zielsystem laufen (PyInstaller kann nicht
+cross-compilieren). Die Datei <code>worker.spec</code> bindet alle benötigten Module des
+Workers ein – wird eines nicht gefunden, bricht der Worker bewusst mit einer
+klaren Meldung ab.</p>
+<h2>8. Grenzen dieser Ausbaustufe</h2>
+<ul>
+<li><strong>Discovery nur im eigenen LAN</strong> (UDP-Broadcast).</li>
+<li><strong>Keine Router-Konfiguration, kein Portforwarding, kein Docker, kein VPN</strong> –
+dafür bewusst verschlüsselt (<code>wss://</code>) und mit Token-Pflicht.</li>
+<li><strong>Keine Sandbox</strong> für übertragenen Code – auf Clients nur Worker verbinden
+lassen, denen du die Rechenzeit auch geben willst.</li>
+<li><strong>Ein Manager gleichzeitig</strong> steuert einen Worker (klare Besitzverhältnisse).</li>
+</ul>
+
+</section>
+<section id="cluster-sicherheit" class="chapter">
+<h1>Cluster-Sicherheit (Token &amp; TLS)</h1>
+<p>Ein Worker führt Python-Code aus, den der Hauptrechner schickt. Das ist die
+gewollte Funktion – und genau deshalb gibt es zwei Schutzschichten:
+<strong>Token</strong> (wer darf verbinden) und <strong>TLS</strong> (was sieht das Netz).</p>
+<h2>1. Token: ohne geht es nicht</h2>
+<ul>
+<li>Der Worker <strong>startet nicht ohne Token</strong> (16–256 Zeichen,
+<code>secrets.token_urlsafe(32)</code>).</li>
+<li>Die Worker-App erzeugt es beim ersten Start selbst und speichert es.</li>
+<li>Jede Verbindung muss sich zuerst mit einem Auth-Frame ausweisen
+(Vergleich gegen Timing-Angriffe gehärtet, max. 3 Fehlversuche, 10 s
+Zeitfenster). Vor der Anmeldung wird <strong>kein</strong> Frame verarbeitet.</li>
+<li>Token wie ein Passwort behandeln: nicht per Chat/Mail weitergeben.</li>
+</ul>
+<p><strong>Auto-Pair:</strong> Damit der Manager ohne Eingabe verbinden kann, kann der Worker
+sein Token im Discovery-Beacon mitsenden – bequem im vertrauten LAN. Mit TLS
+ist der Beacon-Inhalt unterwegs verschlüsselt; in fremden Netzen trotzdem
+besser abschalten und das Token einmalig an der Worker-Karte eintragen.</p>
+<h2>2. TLS: verschlüsselt ab Werk</h2>
+<p>Ab Version 0.4.0 läuft der Worker <strong>standardmäßig verschlüsselt</strong> (<code>wss://</code>)
+und erzeugt sein Zertifikat beim ersten Start <strong>selbst</strong>:</p>
+<ul>
+<li>reine Standardbibliothek – kein <code>openssl</code>, kein <code>cryptography</code>, kein
+Terminal, auch auf einem nackten Windows,</li>
+<li>RSA-2048, gültig 825 Tage, danach still erneuert,</li>
+<li>der <strong>private Schlüssel verlässt den Rechner nie</strong> (Dateirechte <code>0600</code>),</li>
+<li>TLS &lt; 1.2 wird abgelehnt,</li>
+<li>der Discovery-Beacon meldet <code>wss://</code> <strong>und</strong> den SHA-256-Fingerabdruck.</li>
+</ul>
+<p>Der Manager verbindet sich daraufhin automatisch verschlüsselt. Ist die
+Vertrauensart nicht gesetzt, scheitert der Handshake <strong>sichtbar</strong>:</p>
+<pre><code class="language-text">TLS-Problem bei Worker_1: TLS-Handshake mit Worker_1 fehlgeschlagen. Bei einem
+selbstsignierten Zertifikat: in den Cluster-Einstellungen &quot;Selbstsignierte
+Zertifikate erlauben&quot; einschalten oder das Zertifikat des Workers
+(worker-cert.pem) als Vertrauensdatei hinterlegen.
+</code></pre>
+<blockquote>
+<p><strong>Kein stiller Rückfall auf Klartext.</strong> Lieber eine klare Meldung als eine
+unbemerkt unverschlüsselte Verbindung.</p>
+</blockquote>
+<h2>3. Zwei ehrliche Vertrauensarten</h2>
+<p>Ein selbstsigniertes Zertifikat kann keine öffentliche Stelle bestätigen. Statt
+das zu umgehen, gibt es genau zwei klar benannte Wege:</p>
+<table>
+<thead>
+<tr>
+<th>Weg</th>
+<th>Bedienung</th>
+<th>Was geprüft wird</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Selbstsigniert erlauben</strong></td>
+<td>Häkchen im Cluster-Fenster: <em>Selbstsignierte Zertifikate erlauben</em></td>
+<td>Die Verbindung ist <strong>verschlüsselt</strong>, die Identität aber <strong>nicht</strong> geprüft. Schutz gegen Mitlesen, nicht gegen einen aktiven Angreifer im Netz.</td>
+</tr>
+<tr>
+<td><strong>Zertifikat anheften</strong></td>
+<td>An der Worker-Karte <strong>Zertifikat</strong> drücken und <code>worker-cert.pem</code> wählen</td>
+<td><strong>Echte</strong> Prüfung: Signatur, Gültigkeit und Passung. Die Anzeige wird zu <em>TLS, Zertifikat angeheftet und geprüft</em>.</td>
+</tr>
+</tbody></table>
+<p>Den Pfad zur Datei zeigt die Worker-App beim Knopf <strong>Fingerabdruck anzeigen</strong> –
+einmal auf den Hauptrechner kopieren genügt, der Manager merkt sich den Pfad.
+Der Fingerabdruck erscheint auf beiden Seiten; <strong>stimmen sie überein, ist es
+derselbe Rechner.</strong></p>
+<p>Die Karte im Cluster-Fenster sagt immer, was gilt:</p>
+<pre><code class="language-text">TLS, Zertifikat angeheftet und geprüft          (grün)  beste Variante
+TLS, verschlüsselt (Zertifikat nicht geprüft)   (gelb)  Freigabe aktiv
+Ohne Verschlüsselung (ws://)                    (grau)  Klartext
+</code></pre>
+<h2>4. Was TLS hier leistet – und was nicht</h2>
+<p><strong>Leistet:</strong></p>
+<ul>
+<li>Mitlesen im Netz ist wirkungslos: Token, Python-Code, Dateien und Ergebnisse
+sind verschlüsselt.</li>
+<li>Mit angeheftetem Zertifikat ist zusätzlich die <strong>Identität</strong> des Rechners
+geprüft.</li>
+<li>Eine geänderte oder kaputte Vertrauensdatei führt zur <strong>Ablehnung</strong> der
+Verbindung, nie zu einer schwächeren.</li>
+<li>Auch beim automatischen Wiederverbinden bleibt die Vertrauensart gleich.</li>
+</ul>
+<p><strong>Leistet nicht:</strong></p>
+<ul>
+<li>Ohne angeheftetes Zertifikat schützt TLS gegen <strong>Mitlesen</strong>, nicht gegen
+einen <strong>aktiven</strong> Angreifer im selben Netz (Man-in-the-Middle).</li>
+<li>Godot gibt bei <code>WebSocketPeer</code> das empfangene Zertifikat nicht heraus – eine
+Fingerabdruck-Prüfung <em>im Client</em> ist damit technisch nicht möglich. Deshalb
+gibt es keine Scheinlösung, sondern die zwei Wege oben.</li>
+<li>TLS ersetzt keine Sandbox: übertragener Code läuft mit den Rechten des
+Worker-Benutzers.</li>
+</ul>
+
+<div class="adm adm-warning"><p class="adm-title">Fremde Netze</p><p>Über Messe-, Hotel- oder Gast-WLAN zusätzlich einen <strong>VPN-Tunnel</strong> verwenden
+(z. B. WireGuard) und „Auto-Pair“ abschalten.</p>
+</div>
+<h2>5. Eigenes Zertifikat (eigene PKI)</h2>
+<p>Wenn eine eigene Zertifizierungsstelle vorhanden ist, lässt sich der Worker
+damit betreiben:</p>
+<pre><code class="language-bash">python orchestrator_worker.py \
+  --tls-cert /pfad/server.crt --tls-key /pfad/server.key \
+  --token &quot;&lt;token&gt;&quot;
+</code></pre>
+<p>Statt <code>--tls-self-signed</code> werden die beiden PEM-Dateien benutzt; im Manager
+heftet man die passende CA bzw. das Zertifikat an. Fehlt eine der Dateien oder
+ist sie unlesbar, <strong>startet der Worker nicht</strong> – statt heimlich unverschlüsselt
+weiterzulaufen.</p>
+<h2>6. Ohne TLS arbeiten (bewusst)</h2>
+<p>Für Umgebungen, in denen der Manager kein TLS kann: in der Worker-App das
+Häkchen <strong>„Verschlüsselt (TLS)“</strong> entfernen. Der Worker spricht dann wieder
+<code>ws://</code> – das Verhalten der früheren Versionen. Danach im Cluster-Fenster keine
+TLS-Freigabe mehr nötig.</p>
+<h2>7. Empfohlene Aufstellung</h2>
+<ol>
+<li>Worker mit <strong>eigenem, unprivilegiertem Benutzerkonto</strong> starten.</li>
+<li>TLS eingeschaltet lassen und <strong>einmal</strong> <code>worker-cert.pem</code> anheften – dann ist
+die Verbindung verschlüsselt <strong>und</strong> geprüft.</li>
+<li>Token wie ein Passwort behandeln; bei Verdacht in der App <strong>„Neu erzeugen“</strong>
+und im Manager neu eintragen.</li>
+<li>Firewall: nur TCP 8765 und UDP 8766 im LAN erlauben.</li>
+<li>Für fremde Netze: VPN <strong>und</strong> Auto-Pair aus.</li>
+</ol>
+
+<div class="adm adm-tip"><p class="adm-title">Tiefere Prüfung</p><p>Die vollständige Sicherheitsprüfung (Bedrohungsmodell, gefundene und behobene
+Fehler, bewusste Grenzen, Verifikationsliste) steht in
+<code>addons/python_bridge/orchestrator/SAFETY.md</code> im Addon.</p>
+</div>
 
 </section>
 <section id="api" class="chapter">
@@ -4041,6 +4525,10 @@ liefert Ergebnisse, sobald sie fertig sind.</p>
 <td><code>PythonBridgeDataRef</code> / <code>DataFile</code></td>
 <td>Handles und file-basierter Transport</td>
 </tr>
+<tr>
+<td><code>ClusterManager</code> / <code>ClusterPanel</code></td>
+<td>optionale Verteilungsschicht: Discovery, Verbindung, Aufgaben-Zuweisung (siehe <a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a>)</td>
+</tr>
 </tbody></table>
 <h3>Python-Seite</h3>
 <table>
@@ -4162,8 +4650,14 @@ generischen Meldung verkürzt.</p>
 <li>Das GDScript2All-basierte HP-Dock existiert als experimentelles Werkzeug;
 es ist bewusst <strong>kein Kommunikationsweg</strong> (siehe
 <a href="https://cybertoshi.github.io/python-bridge/docs/hochleistungspfade">Kommunikationspfade</a>).</li>
-<li>Cluster-/Docker-Verteilung ist konzeptionell vorbereitet
-(<code>docs/CLUSTER_INTEGRATION_PLAN.md</code>), aber nicht implementiert.</li>
+<li>Die <strong>Cluster-Verteilung ist umgesetzt</strong> (<a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a>): LAN-Discovery,
+verschlüsselter Transport (<code>wss://</code>), Router mit Capacity Gate,
+Datei-Registry mit Chunk-Transfer und SHA-256-Prüfung, Wiederzuweisung nach
+Ausfall. Sie ist bewusst <strong>transportunabhängig</strong> – der Kern (Server-/Task-
+Manager, Router, Dispatcher) weiß nichts vom Netz; nur
+<code>OrchestratorTransport</code> spricht WebSocket.</li>
+<li>Container-/Docker-Orchestrierung bleibt außen vor: das Modul ist für das
+eigene LAN gebaut, nicht für Cloud-Cluster.</li>
 </ul>
 
 </section>
@@ -4640,10 +5134,90 @@ erwartet: <code>ready</code>.</li>
 <td>Fehlermeldung der Instanz lesen (<code>instance_status</code>); meist Python-/venv-Problem</td>
 </tr>
 </tbody></table>
+<h2>Cluster &amp; Worker (andere PCs)</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Ursache</th>
+<th>Lösung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Kein Rechner erscheint</td>
+<td>Client-App läuft nicht, oder Firewall blockt UDP 8766</td>
+<td>Worker-App starten; „Discovery aktiv“ muss im Worker-Log stehen (<a href="https://cybertoshi.github.io/python-bridge/docs/cluster-setup">Cluster aufsetzen</a>)</td>
+</tr>
+<tr>
+<td>Rechner gefunden, verbindet aber nicht</td>
+<td>TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus</td>
+<td>Token an der Worker-Karte nachtragen</td>
+</tr>
+<tr>
+<td>„TLS-Handshake … fehlgeschlagen“</td>
+<td>Selbstsigniertes Zertifikat ohne Freigabe (Absicht, kein stiller Klartext-Rückfall)</td>
+<td>Häkchen <em>Selbstsignierte Zertifikate erlauben</em> setzen oder <code>worker-cert.pem</code> anheften (<a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>)</td>
+</tr>
+<tr>
+<td>Karte zeigt „TLS, verschlüsselt (Zertifikat nicht geprüft)“</td>
+<td>Freigabe statt Anheften aktiv</td>
+<td>Für echte Prüfung das Zertifikat anheften</td>
+</tr>
+<tr>
+<td>Fingerabdrücke stimmen nicht überein</td>
+<td>Anderer Rechner oder Zertifikat wurde neu erzeugt (z. B. nach Löschen des Cache)</td>
+<td>Zertifikat im Manager neu anheften</td>
+</tr>
+<tr>
+<td>Worker meldet „TLS nicht einsatzbereit“ und startet nicht</td>
+<td><code>--tls-cert</code>/<code>--tls-key</code> unvollständig oder unlesbar</td>
+<td>Beide Dateien angeben oder auf das automatische Zertifikat umstellen</td>
+</tr>
+<tr>
+<td>Aufgabe bleibt <code>QUEUED</code></td>
+<td>Kein Rechner verbunden oder alle im Capacity Gate gesperrt (CPU/RAM/Queue)</td>
+<td>Metriken im Cluster-Fenster ansehen</td>
+</tr>
+<tr>
+<td>Aufgabe zeigt „Daten werden übertragen“</td>
+<td>Eingabedatei ist noch unterwegs (<code>WAITING_FOR_DATA</code>)</td>
+<td>Abwarten – das ist der normale Zustand, kein Fehler</td>
+</tr>
+<tr>
+<td>„Datei ist zu gross“ / „Datei-Cache des Workers ist voll“</td>
+<td>Grenzen der Worker-App</td>
+<td><code>--max-file-mb</code> / <code>--max-cache-mb</code> erhöhen oder Cache leeren</td>
+</tr>
+<tr>
+<td>„Prüfsumme stimmt nicht (SHA-256)“</td>
+<td>Netzwerk oder Platte fehlerhaft</td>
+<td>Der Transfer wird begrenzt wiederholt und dann sauber abgebrochen; Protokoll lesen</td>
+</tr>
+<tr>
+<td>Cython-Aufgabe schlägt fehl</td>
+<td>Kein C-Compiler / Paket fehlt</td>
+<td>In der Worker-App <strong>„Umgebung prüfen“</strong> – zeigt Klartext plus Installationshinweis</td>
+</tr>
+<tr>
+<td>Build läuft jedes Mal neu</td>
+<td>Projektordner ändert sich bei jedem Start (z. B. Zeitstempel im Code)</td>
+<td>Cache greift dann absichtlich nicht; Zufallswerte aus dem Code nehmen</td>
+</tr>
+<tr>
+<td>Worker verschwindet nach kurzer Zeit</td>
+<td>App geschlossen oder Standby</td>
+<td>Neu starten; der Manager verbindet selbst wieder und holt offene Aufgaben nach</td>
+</tr>
+<tr>
+<td>Nur Gastnetz / AP-Isolation (kein Broadcast)</td>
+<td>Discovery kommt nicht durch</td>
+<td>Adresse im Cluster-Fenster von Hand eintragen: <code>wss://&lt;ip&gt;:8765</code> + Token</td>
+</tr>
+</tbody></table>
 <h2>Noch Fragen?</h2>
 <p>Die vollständigen Konzepte: <a href="https://cybertoshi.github.io/python-bridge/docs/python-seite">Python-Seite verstehen</a> ·
 <a href="https://cybertoshi.github.io/python-bridge/docs/datenebene">Große Daten</a> · <a href="https://cybertoshi.github.io/python-bridge/docs/konfiguration">Konfiguration</a> ·
-<a href="https://cybertoshi.github.io/python-bridge/docs/api">API-Referenz</a></p>
+<a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a> · <a href="https://cybertoshi.github.io/python-bridge/docs/api">API-Referenz</a></p>
 
 </section>
 <section id="hands-on" class="chapter">

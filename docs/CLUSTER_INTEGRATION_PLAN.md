@@ -1,7 +1,20 @@
 # Cluster-Integration: Python Bridge → Verteilte Worker
 
-Status: **Plan** (noch nicht implementiert). Prototyp zur Orientierung:
-`ClusterComputing/` (Manager/Worker über WebSockets, Docker-Swarm-Deploy).
+Status: **Umgesetzt (v0.4.0)** – dieses Dokument bleibt als Planungs- und
+Entscheidungsgrundlage erhalten. Die tatsächliche Umsetzung weicht bewusst in
+zwei Punkten vom ursprünglichen Plan ab (kein Docker/Swarm, keine
+Portfreigaben: es geht ausschließlich um dasselbe lokale LAN):
+
+| Dokumentation zur Umsetzung | Inhalt |
+|---|---|
+| [`docs-site/docs/cluster.md`](../docs-site/docs/cluster.md) | Überblick, Architektur, Node-Nutzung |
+| [`docs-site/docs/cluster-setup.md`](../docs-site/docs/cluster-setup.md) | Aufsetzen von Hauptrechner und Clients |
+| [`docs-site/docs/cluster-sicherheit.md`](../docs-site/docs/cluster-sicherheit.md) | Token, TLS, Vertrauensarten, Grenzen |
+| [`addons/python_bridge/orchestrator/CLUSTER_V1_SETUP.md`](../addons/python_bridge/orchestrator/CLUSTER_V1_SETUP.md) | Aufsetzen in 5 Minuten, Firewall, Fehlersuche |
+| [`addons/python_bridge/orchestrator/SAFETY.md`](../addons/python_bridge/orchestrator/SAFETY.md) | Sicherheitsprüfung, Funde, ehrliche Grenzen |
+| [`versions/RELEASE_NOTES_0.4.0.md`](../versions/RELEASE_NOTES_0.4.0.md) | Was in welcher Version dazukam |
+
+Ursprünglicher Planungstext (zur Nachvollziehbarkeit der Entscheidungen):
 
 Zielbild: Die lokale Bridge bleibt der Kontrollkern. Ein Task kann wahlweise
 lokal oder an einen entfernten Worker (gleiches Netz / Swarm) gehen. Für den

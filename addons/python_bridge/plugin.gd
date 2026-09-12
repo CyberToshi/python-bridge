@@ -11,6 +11,7 @@ const AUTOLOAD_NAME := "PythonBridge"
 
 var _panel: PythonBridgeEditorPanel = null
 var _hp_plugin: EditorPlugin = null
+var _orchestrator_panel: Control = null
 var _autoload_added_by_plugin: bool = false
 
 func _enter_tree() -> void:
@@ -42,6 +43,27 @@ func _enter_tree() -> void:
 		# parser.
 		Callable(_hp_plugin, "_enter_tree").call_deferred()
 
+	# Optionaler visueller Task-Orchestrator (eigenstaendiges Untermodul,
+	# rein additiv). Entscheidet nur, WO eine bestehende Python-Aufgabe
+	# laeuft; die Python-Ausfuehrung bleibt unveraendert. Fehlt das Modul,
+	# laeuft das Plugin unveraendert weiter.
+	#
+	# WICHTIG: Das Dock wird – wie das Python-Dock – DIREKT von diesem Plugin
+	# registriert. `add_control_to_dock` funktioniert zuverlaessig nur aus einem
+	# beim Editor registrierten Plugin heraus; ein per `script.new()` erzeugtes
+	# Unter-Plugin ist nicht registriert und kann sein Dock stumm verlieren.
+	var orchestrator_panel_path: String = get_script().resource_path.get_base_dir().path_join("orchestrator/editor/orchestrator_panel.gd")
+	var orchestrator_panel_script := load(orchestrator_panel_path) as GDScript
+	if orchestrator_panel_script:
+		_orchestrator_panel = orchestrator_panel_script.new() as Control
+		if _orchestrator_panel != null:
+			_orchestrator_panel.name = "Task Orchestrator"
+			add_control_to_dock(DockSlot.DOCK_SLOT_RIGHT_UL, _orchestrator_panel)
+		else:
+			push_warning("[PythonBridge] Orchestrator-Panel konnte nicht erzeugt werden.")
+	else:
+		push_warning("[PythonBridge] Orchestrator-Panel nicht gefunden: " + orchestrator_panel_path)
+
 func _exit_tree() -> void:
 	# Sauberer Shutdown aller Python-Instanzen, danach Dock + Autoload
 	# entfernen.
@@ -55,6 +77,10 @@ func _exit_tree() -> void:
 	if _hp_plugin:
 		Callable(_hp_plugin, "_exit_tree").call_deferred()
 		_hp_plugin = null
+	if _orchestrator_panel:
+		remove_control_from_docks(_orchestrator_panel)
+		_orchestrator_panel.queue_free()
+		_orchestrator_panel = null
 	# Only remove an autoload that this plugin created. A project-owned
 	# autoload must survive addon reload/disable unchanged.
 	if _autoload_added_by_plugin and ProjectSettings.has_setting("autoload/" + AUTOLOAD_NAME):
@@ -70,6 +96,8 @@ func _process(_delta: float) -> void:
 		pb.poll()
 	if _panel:
 		_panel.editor_poll()
+	if _orchestrator_panel != null and _orchestrator_panel.has_method("editor_poll"):
+		_orchestrator_panel.call("editor_poll")
 
 func _get_bridge() -> Node:
 	return get_node_or_null("/root/" + AUTOLOAD_NAME)

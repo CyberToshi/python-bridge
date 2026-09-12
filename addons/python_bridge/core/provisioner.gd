@@ -83,6 +83,13 @@ func _prepare() -> void:
 	DirAccess.make_dir_recursive_absolute(tmp_dir)
 	DirAccess.make_dir_recursive_absolute(cfg_dir)
 
+	# Godot darf venv und tmp NICHT scannen: die venv enthaelt zehntausende
+	# Fremddateien (numpy-Testdaten etc.), die sonst "UID duplicate"-Warnungen
+	# erzeugen und den Import massiv verlangsamen. `.gdignore` schliesst ein
+	# Verzeichnis vollstaendig aus dem Godot-Dateisystem aus.
+	_write_gdignore(venv)
+	_write_gdignore(tmp_dir)
+
 	_py = _detect_python(str(_cfg.get("python_executable", "")))
 	if _py == "":
 		_fail("[PROV] Kein Python gefunden. Setze python_executable oder installiere Python 3.")
@@ -111,6 +118,20 @@ func _prepare() -> void:
 		_phase = Phase.VENV
 		_start_ms = Time.get_ticks_msec()
 		BridgeProcessManager.spawn(PackedStringArray([_py, "-m", "venv", venv]))
+
+## Legt einen `.gdignore`-Marker an, damit Godot das Verzeichnis ueberspringt.
+func _write_gdignore(dir: String) -> void:
+	if dir == "":
+		return
+	DirAccess.make_dir_recursive_absolute(dir)
+	var marker := dir.path_join(".gdignore")
+	if FileAccess.file_exists(marker):
+		return
+	var f := FileAccess.open(marker, FileAccess.WRITE)
+	if f != null:
+		f.store_string("")
+		f.close()
+
 
 func _start_pip() -> void:
 	_log.append("[PROV] pip install (websockets + Entwickler-Dependencies) ...")

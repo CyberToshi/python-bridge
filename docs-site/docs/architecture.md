@@ -67,6 +67,7 @@ liefert Ergebnisse, sobald sie fertig sind.
 | `BridgeConnectionManager` | WebSocket-Transport mit Decode-Budget |
 | `BridgeSerializer` / `TypeMapper` | Typkonvertierung inkl. Binary-Chunks |
 | `PythonBridgeDataRef` / `DataFile` | Handles und file-basierter Transport |
+| `ClusterManager` / `ClusterPanel` | optionale Verteilungsschicht: Discovery, Verbindung, Aufgaben-Zuweisung (siehe [Cluster](./cluster)) |
 
 ### Python-Seite
 
@@ -168,5 +169,11 @@ Ehrliche Standortbestimmung für die Weiterentwicklung:
 - Das GDScript2All-basierte HP-Dock existiert als experimentelles Werkzeug;
   es ist bewusst **kein Kommunikationsweg** (siehe
   [Kommunikationspfade](./hochleistungspfade)).
-- Cluster-/Docker-Verteilung ist konzeptionell vorbereitet
-  (`docs/CLUSTER_INTEGRATION_PLAN.md`), aber nicht implementiert.
+- Die **Cluster-Verteilung ist umgesetzt** ([Cluster](./cluster)): LAN-Discovery,
+  verschlüsselter Transport (`wss://`), Router mit Capacity Gate,
+  Datei-Registry mit Chunk-Transfer und SHA-256-Prüfung, Wiederzuweisung nach
+  Ausfall. Sie ist bewusst **transportunabhängig** – der Kern (Server-/Task-
+  Manager, Router, Dispatcher) weiß nichts vom Netz; nur
+  `OrchestratorTransport` spricht WebSocket.
+- Container-/Docker-Orchestrierung bleibt außen vor: das Modul ist für das
+  eigene LAN gebaut, nicht für Cloud-Cluster.

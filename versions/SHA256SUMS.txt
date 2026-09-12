@@ -1,0 +1,2 @@
+9dd7abd6aaa8b58f447b20da9f7b58e07727bc70ae4b572ddcb89af83424d9fa  PythonBridge-Plugin-0.4.0.zip
+f38ff396ad52b658b08c5a4367ab8ca2cdb21c379aacb9498b448655281704d1  PythonBridge-Worker-0.4.0.zip

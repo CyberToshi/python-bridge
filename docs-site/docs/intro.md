@@ -22,6 +22,9 @@ gesamte technische Infrastruktur dazwischen:
 - Python-Editor-Dock direkt im Godot-Editor
 - optionale automatische GDScript-Wrapper
 - DataRefs plus binärer bzw. dateibasierter Transport für große Daten
+- **Cluster**: Aufgaben auf andere PCs im LAN verteilen (Discovery,
+  verschlüsselte Verbindung, Datei-Transfer, Ausfallbehandlung) – siehe
+  [Cluster](./cluster)
 
 ## Die wichtigste Regel
 
@@ -66,6 +69,8 @@ Damit die weiteren Kapitel eindeutig sind, hier die wichtigsten Begriffe:
 
 ## Was du damit bauen kannst
 
+- **verteiltes Rechnen**: viele Aufgaben auf mehrere PCs im LAN verteilen
+  ([Cluster](./cluster))
 - numerische Berechnungen und Simulationen
 - Datenaufbereitung, Data Engineering
 - KI-/ML-Workflows (NumPy, PyTorch, …)
@@ -103,18 +108,20 @@ Datei-Transport). Details und Prüfbefehle: [Godot-Verifikation](./godot-verific
 4. [Konfiguration](./konfiguration) – alle Einstellungen erklärt
 5. [Python-Seite verstehen](./python-seite) – was in Python passiert
 6. [Große Daten (DataRefs)](./datenebene) – Data-Plane
-7. [API-Referenz](./api) – jede Funktion dokumentiert
+7. [Cluster](./cluster) – Aufgaben auf andere PCs verteilen
+   - [Cluster aufsetzen](./cluster-setup) – Hauptrechner und Client verbinden
+   - [Cluster-Sicherheit](./cluster-sicherheit) – Token, TLS, Fingerabdruck
+8. [API-Referenz](./api) – jede Funktion dokumentiert
    - [Tasks & Scheduling](./api-tasks)
    - [Daten & Serialisierung](./api-data)
    - [Kern-Komponenten](./api-internals)
    - [Editor & HP-Werkzeuge](./api-editor)
-8. [Fehlerbehebung](./fehlerbehebung) – Probleme und Fehlercodes
+9. [Fehlerbehebung](./fehlerbehebung) – Probleme und Fehlercodes
 
 Ausblick (bewusst getrennt): ein zweiter, geplanter Pfad für sehr große
-lokale Daten über Shared Memory ([Kommunikationspfade](./hochleistungspfade))
-und die konzeptionell vorbereitete Cluster-Verteilung
-([`docs/CLUSTER_INTEGRATION_PLAN.md`](https://github.com/CyberToshi/python-bridge/blob/main/docs/CLUSTER_INTEGRATION_PLAN.md))
-– beides ist noch nicht Teil des verifizierten Standardwegs.
+lokale Daten über Shared Memory
+([Kommunikationspfade](./hochleistungspfade)) – noch nicht Teil des
+verifizierten Standardwegs.
 
 Für den ausführlichen manuellen Workflow (welcher Node, welcher Code,
 Schritt für Schritt) liegt im Repository der

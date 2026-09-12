@@ -1,0 +1,90 @@
+============================================================
+ Python Bridge - Worker (Client-Rechner)
+============================================================
+
+Dieser Ordner macht diesen Rechner zu einem mitrechnenden PC.
+Du brauchst KEIN Terminal, KEINE IP-Adresse und KEINE Einstellungen
+von Hand.
+
+----------------------------------------------
+ SO STARTEST DU (Windows)
+----------------------------------------------
+  1. Doppelklick auf   Worker-Windows.bat
+  2. Im Fenster auf    "Worker starten"   klicken
+  3. Fenster offen lassen - das war alles.
+
+Beim ersten Start kann der Knopf "websockets installieren"
+erscheinen. Einmal anklicken, kurz warten - danach ist alles bereit.
+
+----------------------------------------------
+ SO STARTEST DU (Linux)
+----------------------------------------------
+  1. Terminal in diesem Ordner oeffnen (oder Dateimanager: "Im Terminal
+     oeffnen")
+  2. ./start_worker_linux.sh
+  3. Im Fenster auf "Worker starten" klicken
+
+Falls der Doppelklick nicht startet:
+     chmod +x start_worker_linux.sh
+
+----------------------------------------------
+ WAS PASSIERT DANN?
+----------------------------------------------
+  * Der Rechner meldet sich automatisch im lokalen Netz.
+  * Auf dem Hauptrechner (Godot) erscheint er von allein als Worker.
+  * Von dort geschickte Python-Aufgaben werden hier ausgefuehrt;
+    Ergebnisse gehen automatisch zurueck.
+
+Der Rechner ist erst "sichtbar", wenn im Fenster der gruene Punkt und
+"Worker laeuft" steht.
+
+----------------------------------------------
+ GUT ZU WISSEN
+----------------------------------------------
+  * Das Token ist wie ein Passwort. Es wird beim ersten Start automatisch
+    erzeugt. Wer es hat, darf Aufgaben schicken - also nicht weitergeben,
+    ausser an die Person, die den Hauptrechner bedient.
+  * VERSCHLUESSELT (Standard): Beim ersten Start erzeugt die App selbst ein
+    Zertifikat; die Verbindung laeuft dann als wss:// verschluesselt. Es sind
+    keine Zertifikatsdateien noetig - und es wird auch nichts heruntergeladen.
+    * Damit der Hauptrechner sich verbinden darf, dort EINMAL das Haekchen
+      "Selbstsignierte Zertifikate erlauben" setzen. Das ist Absicht: eine
+      ungeprueft-verschluesselte Verbindung soll nicht heimlich passieren.
+    * Wer es genauer will: im Manager an der Worker-Karte den Knopf
+      "Zertifikat" druecken und diese Datei waehlen:
+         <Benutzer-Cache>/python_bridge_worker/tls/worker-cert.pem
+      Der Knopf "Fingerabdruck anzeigen" zeigt denselben Wert an.
+    * Ohne Verschluesselung (nur im eigenen LAN noetig): das Haekchen
+      "Verschluesselt (TLS)" entfernen - dann laeuft es wieder als ws://.
+  * Dieser Rechner fuehrt bewusst Python-Code aus, den der Hauptrechner
+    schickt. Deshalb bitte NICHT als Administrator/root starten.
+  * Alles laeuft in einem eigenen Arbeitsordner. Es werden keine
+    Systemeinstellungen veraendert und nichts global installiert.
+  * Platz begrenzen (optional, in der App): "Groesste Eingabedatei (MB)"
+    und "Datei-Cache gesamt (MB)".
+  * "Umgebung pruefen" zeigt, was fuer Python/Cython vorhanden ist und was
+    fehlt - in Klartext.
+
+----------------------------------------------
+ WENN ETWAS NICHT GEHT
+----------------------------------------------
+  * Hauptrechner findet diesen PC nicht:
+      - Windows-Firewall: beim ersten Start "Private Netzwerke" erlauben.
+      - Im Manager die Adresse manuell eintragen: ws://<IP>:8765
+        (IP steht im Worker-Fenster oben rechts) + Token aus dem Feld.
+  * "Token ungueltig" / Verbindung bricht sofort ab:
+      - Token auf beiden Seiten muss identisch sein.
+  * Verbindung kommt nicht zustande, im Manager steht "TLS-Handshake ...
+    fehlgeschlagen":
+      - Im Manager einmal "Selbstsignierte Zertifikate erlauben" einschalten
+        (oder das Zertifikat anheften, siehe oben).
+  * Nach dem Loeschen des Cache-Ordners:
+      - Es entsteht ein neues Zertifikat. Dann im Manager das Zertifikat neu
+        anheften (Fingerabdruck stimmt sonst nicht mehr).
+  * Aufgabe bleibt bei "wartet auf Daten" stehen:
+      - Datei ist zu gross fuer die Grenze ("Groesste Eingabedatei")
+        oder der Platz auf der Platte reicht nicht.
+
+Ausfuehrliche Anleitungen liegen bei:
+  CLUSTER_V1_SETUP.md   (Aufsetzen, Firewall, Fehlersuche)
+  SAFETY.md             (Sicherheit und Grenzen)

@@ -19,6 +19,16 @@ const sidebars = {
     'datenebene',
     {
       type: 'category',
+      label: 'Cluster (verteilt rechnen)',
+      collapsed: false,
+      items: [
+        'cluster',
+        'cluster-setup',
+        'cluster-sicherheit',
+      ],
+    },
+    {
+      type: 'category',
       label: 'API-Referenz',
       collapsed: false,
       items: [

@@ -5,11 +5,21 @@ direkt in deinem Godot-Projekt ausführt. Python-Skripte laufen in einer
 projektlokalen virtuellen Umgebung und werden per WebSocket mit GDScript
 verbunden.
 
+Zusätzlich kann dasselbe Addon Python-Aufgaben auf **andere PCs im eigenen LAN
+verteilen** (Cluster-Modul): automatische Erkennung, verschlüsselte Verbindung
+mit selbst erzeugtem Zertifikat, Datei-Transfer mit SHA-256-Prüfung und
+Weiterlaufen nach einem Rechner-Ausfall. Der Client-Rechner braucht dafür keine
+Terminal-Befehle und keine IP-Eingabe – nur die mitgelieferte Worker-App.
+
+Aktuelle Version: siehe [`versions/VERSION`](versions/VERSION) · Pakete und
+Änderungen: [`versions/`](versions/)
+
 ## Inhalt dieses Repos
 
 | Pfad | Inhalt |
 | --- | --- |
-| [`addons/python_bridge/`](addons/python_bridge/) | Das Godot-Addon (Plugin) |
+| [`addons/python_bridge/`](addons/python_bridge/) | Das Godot-Addon (Plugin), inkl. Cluster-Modul (`cluster/`, `orchestrator/`) |
+| [`versions/`](versions/) | Fertige Pakete (Plugin- und Worker-ZIP), Release-Notizen, Prüfsummen |
 | [`docs-site/`](docs-site/) | Docusaurus-Quelle der Dokumentations-Website |
 | [`docs/`](docs/) | Ausführliche Repository-Guides (manueller Workflow, Screenshots, Cluster-Plan) |
 | `.github/workflows/deploy-docs.yml` | Baut die Docs und veröffentlicht sie auf GitHub Pages |
@@ -21,6 +31,13 @@ Die vollständige, strukturierte Dokumentation ist online unter
 **<https://cybertoshi.github.io/python-bridge/>** verfügbar. Sie deckt
 Installation, Konfiguration, Python-Seite, DataRefs, Architektur,
 Fehlerbehebung und eine **API-Referenz für jede Funktion des Addons** ab.
+
+Das **Cluster-Modul** (Aufgaben auf andere PCs verteilen) ist ab v0.4.0 Teil des
+Addons:
+
+- [Cluster – Überblick](https://cybertoshi.github.io/python-bridge/docs/cluster)
+- [Cluster aufsetzen](https://cybertoshi.github.io/python-bridge/docs/cluster-setup)
+- [Cluster-Sicherheit (Token & TLS)](https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit)
 
 Zusätzlich liegen im Repository ausführliche Guides unter [`docs/`](docs/) –
 z. B. der manuelle Copy-Paste-Workflow
@@ -57,8 +74,8 @@ Ein Tag mit `v`-Präfix baut automatisch `python_bridge_addon.zip` und legt
 ein GitHub Release an:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 Das Release ist danach unter
