@@ -7,8 +7,8 @@ description: Genau zwei Wege zwischen Godot und Python – WebSocket für Kontro
 # Kommunikationspfade
 
 Zwischen Godot und Python gibt es genau **zwei Wege**. Alles andere
-(GDScript2All, Cluster) ist entweder ein Werkzeug oder ein Ausblick –
-kein dritter Transportweg.
+(GDScript2All, Cluster) ist entweder ein Werkzeug oder benutzt einen dieser
+Wege – kein dritter Transportweg.
 
 ```text
 Pfad 1 (verifiziert)        Pfad 2 (Konzept, lokal)
@@ -197,10 +197,14 @@ memcpy(out.ptrw(), region->payload, region->nbytes);
   bleibt gleich schnell, und „übersetzen“ ist keine Datenübertragung.
   Beides getrennt zu denken verhindert die Verwechslung „ich übersetze,
   also ist mein Transport schnell“.
-- **Cluster / Docker:** konzeptionell vorbereitet
-  (`docs/CLUSTER_INTEGRATION_PLAN.md`), bewusst noch nicht implementiert.
-  Für Cluster gilt ohnehin: Shared Memory ist unbrauchbar (kein
-  gemeinsamer RAM über Maschinen) – dort zählt Pfad 1 über das Netz.
+- **Cluster:** verteiltes Rechnen ist seit v0.4.0 **umgesetzt**
+  ([Cluster](./cluster)), aber es ist **kein dritter Transportweg**: der
+  Cluster benutzt Pfad 1 (WebSocket) über das Netz. Für ihn gilt außerdem:
+  Shared Memory ist unbrauchbar (kein gemeinsamer RAM über Maschinen) –
+  Pfad 2 bleibt eine Sache innerhalb *eines* Rechners.
+- **Docker / Container-Orchestrierung:** weiterhin nicht Teil des Werkzeugs.
+  Der Cluster ist bewusst für dasselbe LAN gebaut, nicht für Cloud-Betrieb
+  (`docs/CLUSTER_INTEGRATION_PLAN.md` bleibt als Planungstext erhalten).
 
 ---
 

@@ -53,11 +53,14 @@ ClusterPanel (dunkle Oberfläche)   ├── ClusterManager (Node)
 * **Code-Übertragung:** der Manager schickt den Python-Quelltext als
   Inline-Source mit; der Worker führt ihn in einem temporären Arbeitsverzeichnis
   aus. Vorbereitete Skript-Ordner auf den Clients sind **nicht** nötig.
-* **Verschlüsselt ab Werk (TLS):** der Worker meldet im Discovery-Beacon
-  `wss://` samt Zertifikat-Fingerabdruck; der Manager verbindet automatisch
-  verschlüsselt. Selbstsignierte Zertifikate erlaubt man einmal per Häkchen im
-  Panel – oder man heftet `worker-cert.pem` an und bekommt echte Prüfung.
-  Anleitung: Abschnitt 3b in [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md).
+* **Verschlüsselt ab Werk (TLS):** die Worker-App startet den Worker mit
+  `wss://`; er meldet das samt Zertifikat-Fingerabdruck im Discovery-Beacon, und
+  der Manager verbindet automatisch verschlüsselt. Selbstsignierte Zertifikate
+  erlaubt man einmal per Häkchen im Panel – oder man heftet `worker-cert.pem` an
+  und bekommt echte Prüfung. Anleitung: Abschnitt 3b in
+  [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md).
+  **Nicht** verschlüsselt ist der Beacon selbst (unverschlüsselter UDP-Broadcast)
+  und ein Worker, den man von Hand **ohne** `--tls-self-signed` startet.
 * **Projekte & Cython:** ein ganzer Projektordner kann gesendet werden. Der
   Worker legt eine isolierte Umgebung an, installiert `requirements.txt`,
   kompiliert `.pyx`/`setup.py` und cached den Build (Fingerabdruck aus Quellen,
@@ -264,8 +267,9 @@ Remote-Code-Execution-Risiko. Deshalb gilt:
   reduziert. Pro Datei ist eine Größe begrenzt, der Cache insgesamt sowie der
   freie Plattenplatz (Reserve); Empfangene Dateien werden erst nach geprüfter
   Prüfsumme übernommen (keine halben Dateien).
-* **Verschlüsselung (TLS, ab 0.4.0):** Der Worker ist standardmäßig
-  verschlüsselt (`wss://`) und erzeugt sein Zertifikat beim ersten Start selbst –
+* **Verschlüsselung (TLS, ab 0.4.0):** Die Worker-App startet den Worker
+  standardmäßig verschlüsselt (`wss://`); er erzeugt sein Zertifikat beim ersten
+  Start selbst –
   ohne `openssl`, ohne Zusatzpakete. Der Manager bietet genau zwei ehrliche
   Vertrauensarten: *selbstsigniert erlauben* (verschlüsselt, Identität ungeprüft)
   oder **Zertifikat anheften** (`worker-cert.pem` → echte Prüfung inkl.

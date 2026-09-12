@@ -1,5 +1,16 @@
 # Orchestrator: zweiter Rechner als echter Worker
 
+> **Für den normalen Betrieb ist [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md) der
+> aktuelle Weg** (Worker-App, automatische Erkennung, TLS an). Dieses Dokument
+> beschreibt den **manuellen Start auf der Kommandozeile** – nützlich zum Testen
+> und für Rechner, auf denen ohnehin ein Terminal offen ist.
+>
+> **Wichtig beim manuellen Start:** TLS ist auf der Kommandozeile **nicht**
+> voreingestellt. Ohne `--tls-self-signed` (oder `--tls-cert`/`--tls-key`) läuft
+> der Worker **unverschlüsselt (`ws://`)** – Token, Code und Ergebnisse gehen
+> dann im Klartext durchs Netz. Die Worker-App macht das standardmäßig
+> andersherum.
+
 Dieses Dokument beschreibt den **ersten echten LAN-Test**. Der Rechner mit
 Godot ist der **Controller**. Der andere Rechner ist ein **Worker**. Der Worker
 führt vorhandene Python-Skripte aus; Godot bleibt für Graph, Routing,
@@ -10,10 +21,13 @@ Godot / Controller  ── WebSocket ──>  Worker-PC
        Router + Dispatcher             Python-Ausführung
 ```
 
-> Der aktuelle erste Transport unterstützt noch keine automatische
-> Dateiübertragung. Ein Skript und seine Eingabedateien müssen für diesen Test
-> bereits im Worker-Workspace vorhanden sein. Die geplante File Registry und
-> der Chunk-Transfer kommen in Phase 6–8.
+> **Dateiübertragung ist inzwischen umgesetzt** (File Registry, Chunk-Transfer,
+> SHA-256-Prüfung): Skript und Eingabedateien kann der Manager selbst
+> übertragen – siehe [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md), Abschnitt
+> „Große Eingabedateien“, und [SAFETY.md](SAFETY.md).
+>
+> Für den **manuellen** Weg hier gilt weiterhin: was auf dem Worker liegen
+> soll, muss vorher dort liegen (`--scripts-dir`).
 
 ## 1. Voraussetzungen
 
@@ -292,25 +306,28 @@ Der Worker braucht NumPy in seiner Umgebung:
 python -m pip install numpy
 ```
 
-Die Datei `numpy_bench.py` definiert aktuell Funktionen, führt beim direkten
-Start aber nicht automatisch eine Funktion aus. Für einen einfachen
-Orchestrator-Smoke-Test ist `hello.py` geeigneter; die Bridge-API für
-`call(function, args, kwargs)` wird in der nächsten Transportausbaustufe an
-den Dispatcher angebunden.
+Die Datei `numpy_bench.py` definiert Funktionen und führt beim direkten Start
+keine davon automatisch aus. Mit `command = "call"` zusammen mit `function`
+(und optional `args`/`kwargs`) ruft der Worker die gewünschte Funktion auf –
+das ist angebunden und getestet. Für einen einfachen Smoke-Test bleibt
+`hello.py` trotzdem der kürzere Weg.
 
 ## 8. Aktuelle Grenzen – bewusst ehrlich
 
-Der echte WebSocket-Pfad ist jetzt vorhanden und testbar. Noch nicht Teil des
-aktuellen ersten LAN-Tests sind:
+Inzwischen umgesetzt und damit **kein** Grenzpunkt mehr:
 
-- automatische File Registry und Dateiübertragung/Hash-Verifikation
-- TLS
-- persistente Wiederaufnahme eines Tasks nach Controller-Neustart
+- File Registry, Chunk-Transfer und SHA-256-Verifikation
+- TLS (in der Worker-App voreingestellt, per `--tls-self-signed` auch hier)
+- Installation des einzigen Zusatzpakets `websockets` per Knopf in der
+  Worker-App (kein Terminal nötig); auf der Kommandozeile weiterhin `pip`
+
+Weiterhin nicht Teil des Werkzeugs:
+
+- persistente Wiederaufnahme eines Tasks nach **Controller**-Neustart
 - vollständige Abbildung der bestehenden Python-Bridge-`call`-/`context`-API
   im Orchestrator-Worker
-- automatische Installation von Worker-Abhängigkeiten
 - Systemdienst/Autostart des Workers
 
-Bis Phase 6–8 gilt deshalb: erst mit kleinen, lokalen Skripten und einem
-vertrauenswürdigen Netz testen. Der Kern für Routing, Kapazitätsgate,
+Für diesen manuellen Weg gilt deshalb: erst mit kleinen, lokalen Skripten und
+einem vertrauenswürdigen Netz testen. Der Kern für Routing, Kapazitätsgate,
 Assignment, ACK, Timeout und Reassignment ist bereits durch Tests abgesichert.

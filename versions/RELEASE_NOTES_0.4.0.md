@@ -8,7 +8,7 @@
 
 | Was | Für wen |
 |---|---|
-| **Verschlüsselte Verbindungen (TLS/wss) – ab Werk** | Alle, die den Cluster im WLAN oder in einem geteilten Netz betreiben |
+| **Verschlüsselte Verbindungen (TLS/wss) – in der Worker-App ab Werk** | Alle, die den Cluster im WLAN oder in einem geteilten Netz betreiben |
 | **Eingabedateien und Transfer-Fortschritt in der Oberfläche** | Alle, die große Eingaben nutzen (vorher nur über Code erreichbar) |
 | **„Aufgabe starten“ funktionierte nicht** | Alle – der Knopf erzeugte keine Aufgabe |
 | **„Umgebung prüfen“ wäre mit TLS kaputtgegangen** | Alle mit dem neuen Standard |
@@ -17,9 +17,20 @@
 
 ## 1. TLS (Transportverschlüsselung)
 
-Der Worker ist jetzt **standardmäßig verschlüsselt** und erzeugt sein Zertifikat
-beim ersten Start **selbst**: reine Standardbibliothek, kein `openssl`, kein
-`cryptography`, kein Terminal – funktioniert auch auf einem nackten Windows.
+Die **Worker-App** startet den Worker jetzt **standardmäßig verschlüsselt**
+(Häkchen *„Verschluesselt (TLS)“* ist voreingestellt); er erzeugt sein
+Zertifikat beim ersten Start **selbst**: reine Standardbibliothek, kein
+`openssl`, kein `cryptography`, kein Terminal – funktioniert auch auf einem
+nackten Windows.
+
+> Wer den Worker **von Hand** auf der Kommandozeile startet, muss
+> `--tls-self-signed` (oder `--tls-cert`/`--tls-key`) angeben – sonst bleibt es
+> beim bisherigen Klartext `ws://`. Das betrifft die Beispiele in
+> `CLIENT_SETUP.md` und `WORKER_SETUP.md`.
+>
+> **Nicht** verschlüsselt ist das Suchsignal (Discovery-Beacon):
+> unverschlüsselter UDP-Broadcast. Ist die automatische Kopplung an
+> (App-Standard), steht das **Token im Klartext** darin. Siehe `SAFETY.md` §3b.
 
 * **Discovery meldet es mit:** der Beacon enthält `tls: true`, `scheme: wss` und
   den SHA-256-Fingerabdruck. Der Manager verbindet automatisch verschlüsselt.
@@ -32,7 +43,9 @@ beim ersten Start **selbst**: reine Standardbibliothek, kein `openssl`, kein
   * *Zertifikat anheften* (`worker-cert.pem` über den Knopf **Zertifikat** an der
     Worker-Karte): **echte** Prüfung von Signatur, Gültigkeit und Passung.
 * **Oberfläche zeigt den Zustand pro Rechner:** „geprüft“ (grün),
-  „verschlüsselt (nicht geprüft)“ (gelb), „ohne Verschlüsselung“ (grau).
+  „verschlüsselt (nicht geprüft)“ (gelb), „Systemvertrauen (selbstsigniert
+  scheitert)“ (gelb) und „ohne Verschlüsselung (ws://)“ (grau). Die Texte stehen
+  bewusst ohne Umlaute in der Oberfläche (`geprueft`, `verschluesselt`).
 * **Härtung:** TLS < 1.2 wird abgelehnt; der private Schlüssel liegt mit Rechten
   `0600` und verlässt den Rechner nie; ein kaputtes Zertifikat führt zur
   **Ablehnung** der Verbindung, nicht zu einer schwächeren; widersprüchliche

@@ -20,8 +20,8 @@ Standardbibliothek, keine Annahmen über `/proc` außer für die Anzeige).
 
 | Annahme | Konsequenz |
 |---|---|
-| Das LAN ist **vertrauenswürdig**, aber nicht vertrauensselig | Token-Pflicht **und** TLS ab Werk (`wss://`, §6a) |
-| Ein Mitleser sitzt eventuell im selben Netz | Alles läuft verschlüsselt; Identität wird nur bei angeheftetem Zertifikat geprüft |
+| Das LAN ist **vertrauenswürdig**, aber nicht vertrauensselig | Token-Pflicht **und** TLS in der Worker-App (`wss://`, §3a) |
+| Ein Mitleser sitzt eventuell im selben Netz | Verbindung, Code, Dateien und Ergebnisse laufen verschlüsselt; Identität wird nur bei angeheftetem Zertifikat geprüft. **Nicht** verschlüsselt ist der Discovery-Beacon – mit Auto-Pair steht dort das Token im Klartext (§3b) |
 | Nachrichten aus dem Netz sind **feindlich** | Jede Eingabe wird validiert, bevor sie wirkt |
 | Der Manager ist die **einzige** Steuerinstanz | Ein Controller gleichzeitig; weitere Verbindungen ersetzen die alte |
 | Der Worker läuft mit **normalen Benutzerrechten** | Kein Dienst, kein Root, keine Systemänderung nötig |
@@ -152,9 +152,17 @@ Aufgabe und findet sie zusätzlich in `input['_files']` — ohne Pfade zu raten.
 
 ## 3a. Transportverschlüsselung (TLS) – was sie leistet und was nicht
 
-Seit 0.4.0 ist der Worker **standardmäßig verschlüsselt**. Er erzeugt beim
-ersten Start selbst ein RSA-2048-Zertifikat (reine Standardbibliothek – kein
-`openssl`, kein `cryptography`, kein Terminal) und lauscht auf `wss://`.
+Seit 0.4.0 startet die **Worker-App** den Worker **standardmäßig verschlüsselt**
+(Häkchen „Verschluesselt (TLS) - Zertifikat wird automatisch erzeugt“,
+voreingestellt). Er erzeugt beim ersten Start selbst ein RSA-2048-Zertifikat
+(reine Standardbibliothek – kein `openssl`, kein `cryptography`, kein Terminal)
+und lauscht auf `wss://`.
+
+**Wichtig und oft übersehen:** wer den Worker **von Hand** startet
+(`python orchestrator_worker.py --token …`), bekommt **kein** TLS – dafür ist
+`--tls-self-signed` (oder `--tls-cert/--tls-key`) nötig. Die Beispiele in
+`CLIENT_SETUP.md` und `WORKER_SETUP.md` sind genau dieser manuelle Weg und
+tragen deshalb einen entsprechenden Hinweis.
 
 **Der ehrliche Teil:** Godot reicht bei `WebSocketPeer` weder das empfangene
 Zertifikat noch einen eigenen Prüfer durch. Eine "Fingerabdruck-Prüfung im
@@ -179,7 +187,9 @@ Wichtige Eigenschaften der Umsetzung:
   nicht Teil des Beacon. Der Fingerabdruck (SHA-256) ist **kein** Geheimnis:
   er steht im Discovery-Beacon und in der Oberfläche zum Vergleich.
 * **Zertifikat ist selbst seine eigene CA** (`CA:TRUE`), deshalb funktioniert
-  das Anheften ohne Zusatzschritte. Gültigkeit 825 Tage, danach still neu.
+  das Anheften ohne Zusatzschritte. Gültigkeit 825 Tage; erneuert wird
+  **sieben Tage vor Ablauf** (Zeitpunkt steht in `<cache>/tls/worker-cert.json`),
+  der Fingerabdruck bleibt über die Laufzeit stabil.
 * **Kein Downgrade durch Umkonfiguration.** Auch beim automatischen
   Wiederverbinden wird dieselbe Vertrauensart verwendet; eine kaputte
   Vertrauensdatei führt zur **Ablehnung**, nicht zu „verbinde trotzdem“.
@@ -189,6 +199,25 @@ wichtigste realistische Gefahr – Mitlesen (Passiv-Angriff, z. B. im WLAN) –
 abgedeckt. Gegen einen **aktiven** Angreifer im selben Netz hilft nur die
 angeheftete Datei oder ein VPN. Das ist bewusst so dokumentiert und nicht
 weggeredet.
+
+---
+
+## 3b. Was TLS hier **nicht** abdeckt (Klartext-Stellen)
+
+Diese Punkte sind bewusst so gebaut (Plug & Play), müssen aber bekannt sein:
+
+| Stelle | Was im Klartext läuft | Einschätzung |
+|---|---|---|
+| **Discovery-Beacon** (UDP 8766, Broadcast an `255.255.255.255`) | Rechnername, Port, Queue-Kapazität, TLS-Zustand, Fingerabdruck – und **mit Auto-Pair auch das Token** | Auto-Pair ist in der Worker-App **voreingestellt an** (`"auto_pair": true`). Wer im selben Netz mitschneidet, erhält damit das Token und darf anschließend Aufgaben einreichen. TLS schützt nur die **WebSocket-Verbindung**, nicht den Beacon. Abschaltbar: Häkchen in der App (dann Token einmal im Manager eintragen) oder `--no-discover`/ohne `--auto-pair` auf der Kommandozeile. |
+| **Token auf der Workerseite** | `worker_config.json` neben der App, Klartext JSON | Die Datei wird ohne besondere Rechte angelegt (Standard-umask, unter Linux typisch `644`). Auf Rechnern mit mehreren Konten `chmod 600 worker_config.json` setzen. |
+| **Token auf der Managerseite** | `user://cluster_workers.json` (bzw. `state_path`), Klartext JSON | Enthält `{"tokens": …, "known": …}`. Gleiche Empfehlung: Datei schützen. |
+| **HTTP-Header des Handshakes** | SNI/Host – also die IP, nicht den Inhalt | Unkritisch im LAN. |
+| **Datei-Transfer** | läuft **innerhalb** der TLS-Verbindung | Kein separater Klartext-Pfad. |
+
+**Empfehlung für Netze, denen du nicht traust:** VPN verwenden **und** Auto-Pair
+abschalten. Im eigenen LAN mit eigenen Geräten ist der Beacon-Broadcast
+gleichwertig mit „jeder im WLAN darf mitrechnen“ – das ist eine bewusste
+Entscheidung, keine Lücke im Code.
 
 ---
 
@@ -229,17 +258,23 @@ weggeredet.
 
 ## 6. Empfohlene Aufstellung
 
-1. Worker mit **eigenem, unprivilegiertem Benutzerkonto** starten.
-2. TLS eingeschaltet lassen (Standard) und im Manager **einmal** die Datei
-   `worker-cert.pem` anheften – dann ist die Verbindung verschlüsselt **und**
-   das Gegenüber geprüft (`§3a`).
-3. Token wie ein Passwort behandeln: nicht per Chat/Mail, sondern abtippen oder
-   über einen sicheren Kanal; `--auto-pair` nur im vertrauten LAN.
-3. Arbeitsverzeichnis auf ein Verzeichnis mit ausreichend Platz legen
-   (`--work-dir`) und `--max-file-mb`/`--max-cache-mb` an die Maschine anpassen.
-4. Firwewall: nur den Worker-Port (Standard 8765/TCP) und den
+1. Worker mit **eigem, unprivilegiertem Benutzerkonto** starten und die
+   Token-Datei schützen: `chmod 600 worker_config.json` (bzw. die Datei aus
+   `--token-file`).
+2. TLS eingeschaltet lassen (in der App Standard) und im Manager **einmal** die
+   Datei `worker-cert.pem` anheften – dann ist die Verbindung verschlüsselt
+   **und** das Gegenüber geprüft (`§3a`).
+3. **Auto-Pair abschalten** und das Token einmal im Manager eintragen; damit
+   liegt es nicht mehr unverschlüsselt im Discovery-Broadcast (`§3b`).
+4. Token wie ein Passwort behandeln: nicht per Chat/Mail, sondern abtippen oder
+   über einen sicheren Kanal.
+5. Arbeitsverzeichnis auf ein Verzeichnis mit ausreichend Platz legen
+   (`--work-dir`) und `--max-file-mb`/`--max-cache-mb` an die Maschine anpassen;
+   eine **einzelne** Eingabedatei bleibt auf 512 MB begrenzt (`MAX_FILE_BYTES`
+   im Manager).
+6. Firewall: nur den Worker-Port (Standard 8765/TCP) und den
    Discovery-Port (8766/UDP) im LAN erlauben.
-5. Bei Verbindungen außerhalb des LAN zusätzlich VPN.
+7. Bei Verbindungen außerhalb des LAN zusätzlich VPN.
 
 ---
 

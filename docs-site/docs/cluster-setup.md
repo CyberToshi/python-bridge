@@ -51,9 +51,11 @@ Auf jedem mitrechnenden PC einmalig:
 1. **Python installieren**, falls noch nicht vorhanden (unter Linux zusätzlich
    `python3-tk`, sonst startet die Oberfläche nicht). Das ist die einzige
    Voraussetzung – Compiler, Cython, Docker, Zusatzpakete sind **nicht** nötig.
-2. Addon-Ordner aus dem Addon-ZIP bzw. dem Repository auf den Rechner kopieren
-   (`addons/python_bridge/orchestrator/worker/`) – oder das fertige
-   `PythonBridge-Worker-*.zip` entpacken.
+2. Worker-Paket auf den Rechner kopieren: den Ordner
+   `addons/python_bridge/orchestrator/worker/` (aus Addon-ZIP oder Repository)
+   oder das fertige `PythonBridge-Worker-*.zip` aus `versions/` entpacken. Das
+   Paket ist eigenständig – **Godot und das Addon sind auf dem Client nicht
+   nötig.**
 3. Starten:
    * **Windows:** Doppelklick auf `Worker-Windows.bat`
    * **Linux:** `./start_worker_linux.sh`
@@ -80,9 +82,18 @@ Im Cluster-Fenster:
 4. Optional Ziel-Rechner wählen („Automatisch“ = der Router entscheidet).
 5. **Aufgabe starten**.
 
-Die Tabelle zeigt danach: Status, Fortschritt (`env`, `build`, `run` bzw.
-„Daten werden übertragen“), Rechner, Versuch, Build (`neu gebaut` / `Cache`)
-und Ergebnis.
+Die Tabelle zeigt danach: Name, Status, Fortschritt, Rechner, Versuch, Build und
+Ergebnis.
+
+* **Fortschritt:** die Stufe plus Prozent – `detect` (Projekt prüfen), `env`
+  (Umgebung), `deps` (Abhängigkeiten), `build` (kompilieren), `run` (Programm
+  starten). Vor dem Start steht dort „Daten werden uebertragen“; ohne
+  Fortschrittsmeldung „wartet“.
+* **Versuch:** `verbraucht/erlaubt`, z. B. `1/3` (ein Versuch, zwei Wiederholungen).
+* **Build:** `neu gebaut` oder `Cache` (unverändertes Projekt wurde nicht neu
+  kompiliert).
+* **Ergebnis:** Fehlermeldung bzw. Rückgabe; Maus darüber zeigt den Hinweis aus
+  der Zeile `Loesung:` des Workers.
 
 ### Der Ablauf im Hintergrund
 
@@ -111,43 +122,78 @@ Dateien sind kein Anhang der Nachricht, sondern Teil der Orchestrierung:
   der Auftrag verschickt,
 * ist die Datei schon vorhanden (auch von einem früheren Lauf), findet **kein**
   Transfer statt,
-* im Programm liegen die Dateien im Arbeitsverzeichnis und zusätzlich benannt:
+* im Programm liegen sie im **Arbeitsverzeichnis** – und `input["_files"]`
+  nennt ihre Namen, damit kein Skript raten muss, wie die Datei hier heißt:
 
 ```python
+# "_files" = Liste der bereitgestellten Dateinamen im Arbeitsverzeichnis.
+# Der Name auf dem Client kann anders sein als in deinem Projekt.
 name = (input or {}).get("_files", ["daten.dat"])[0]
-data = open(name, "rb").read()
+with open(name, "rb") as f:
+    data = f.read()
 ```
 
-Grenzen (in der Worker-App einstellbar): **Größe pro Datei** (Standard 512 MB)
-und **Datei-Cache gesamt** (Standard 4 GB). Wird eine Grenze überschritten,
-steht im Protokoll ein konkreter Satz – kein stilles Scheitern.
+Grenzen – und **welche** gerade greift, ist wichtig:
+
+| Grenze | Wo festgelegt | Standard |
+|---|---|---|
+| Größe einer Eingabedatei | Manager (`MAX_FILE_BYTES`, fest) | 512 MB |
+| Größe pro Datei auf dem Worker | Worker-App: **Groesste Eingabedatei (MB)** | 512 MB |
+| Datei-Cache des Workers gesamt | Worker-App: **Datei-Cache gesamt (MB)** | 4096 MB |
+| Dateien pro Aufgabe | Worker (fest) | 64 |
+| Inline-`source` im Auftrag | Worker (fest) | 2 MB |
+| `input`/`args`/`kwargs` | Worker (fest) | 1 MB |
+| Ein Auftrag auf der Leitung | Manager `max_payload_bytes` | 3 MB |
+
+Eine einzelne Datei über **512 MB geht nicht**, auch wenn der Worker-Wert höher
+gesetzt wird – der Manager lehnt sie schon beim Registrieren ab und sagt das im
+Protokoll. Der Worker prüft dieselbe Größe zusätzlich beim Empfangen. Wird eine
+Grenze überschritten, steht ein konkreter Satz mit Größe und Limit im
+Protokoll – kein stilles Scheitern.
+
+Übertragen wird **eine Datei nach der anderen**; die Fortschrittsbalken laufen
+deshalb nacheinander, nicht parallel.
 
 ## 5. Firewall
 
-| Richtung | Protokoll | Port | Wofür |
-|---|---|---|---|
-| Client → Netz | UDP (Broadcast) | **8766** | Discovery („ich bin da“) |
-| Manager → Client | TCP | **8765** | Aufgaben, Dateien, Ergebnisse |
+| Rechner | Richtung | Protokoll | Port | Wofür |
+|---|---|---|---|---|
+| Client (Worker) | **ausgehend** | UDP (Broadcast) | **8766** | „ich bin da“ (Beacon) |
+| Client (Worker) | **eingehend** | TCP | **8765** | Aufgaben, Dateien, Ergebnisse |
+| Hauptrechner (Manager) | **eingehend** | UDP | **8766** | Beacons der Rechner empfangen |
+| Hauptrechner (Manager) | ausgehend | TCP | 8765 | zur Gegenstelle verbinden |
 
-Auf dem **Client-Rechner** eingehend erlauben: UDP 8766 und TCP 8765. Windows
-fragt beim ersten Start selbst – „Private Netzwerke“ genügt.
+Der Worker bindet auf der UDP-Seite einen **freien Port** – dort ist *eingehend*
+keine Regel nötig; entscheidend ist, dass sein **Broadcast nach draußen**
+durchgeht. Auf dem Client-Rechner also **eingehend TCP 8765** erlauben (und
+ausgehend UDP 8766). Windows fragt beim ersten Start selbst – „Private
+Netzwerke“ genügt.
+
+Wenn gar nichts passiert, obwohl TCP erlaubt ist: zuerst prüfen, ob der Router
+den Broadcast blockiert (Gastnetz/AP-Isolation) – dann von Hand eintragen.
 
 Klappt kein Broadcast (Gastnetz, AP-Isolation), trägt man den Rechner im
 Cluster-Fenster einmal von Hand ein: `wss://<ip>:8765` plus Token aus der
-Worker-App.
+Worker-App. Wichtig ist das Schema – die Adresse wird **wörtlich** genommen:
+* `wss://` → verschlüsselt (Worker-App-Standard). Ein selbstsigniertes
+  Zertifikat braucht zusätzlich die Freigabe oder das angeheftete Zertifikat.
+* `ws://` → unverschlüsselt; passt nur zu einem Worker, der ohne TLS läuft,
+  und ist mit einem TLS-Worker gar nicht möglich (der Handshake scheitert).
 
 ## 6. Fehlersuche
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| Kein Rechner erscheint | Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Fenster steht „Discovery aktiv“, wenn die Meldung rausgeht. |
-| Rechner erscheint, bleibt aber grau/rot | TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus. Token an der Worker-Karte nachtragen. |
+| Kein Rechner erscheint | Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Log steht „Discovery aktiv“, sobald die Meldungen rausgehen („Discovery inaktiv“ nennt sonst den Grund). |
+| Rechner erscheint, bleibt aber grau/rot | TCP 8765 geblockt, falsches Token, oder die automatische Kopplung ist abgeschaltet. Token an der Worker-Karte nachtragen (Knopf **Token**). |
 | „TLS-Handshake … fehlgeschlagen“ | Absicht: der Worker läuft verschlüsselt mit eigenem Zertifikat. Häkchen **Selbstsignierte Zertifikate erlauben** setzen oder das Zertifikat anheften – [Cluster-Sicherheit](./cluster-sicherheit). |
 | Aufgabe bleibt `QUEUED` | Kein Rechner verbunden oder alle im Capacity Gate gesperrt. Metriken im Panel ansehen. |
 | Aufgabe steht auf „Daten werden übertragen“ | Die Eingabedatei ist noch unterwegs – das ist der normale Zustand, kein Fehler. |
 | Cython-Aufgabe schlägt fehl | In der Worker-App **„Umgebung prüfen“** drücken: sie zeigt in Klartext, ob Python, pip, venv und ein C-Compiler vorhanden sind. |
 | Aufgabe `FAILED` | Fehlermeldung in der Tabelle; Maus über die Ergebniszelle zeigt den Lösungshinweis des Workers. |
-| Worker verschwindet | App geschlossen oder Standby. Einfach neu starten – der Manager verbindet selbst wieder. |
+| Worker verschwindet | App geschlossen oder Standby. Einfach neu starten – der Manager verbindet selbst wieder. Nach 8 s ohne Beacon gilt der Rechner als verschwunden, nach 6 s ohne Heartbeat als `UNRESPONSIVE`. |
+| Karte zeigt „Ohne Verschluesselung (ws://)“ | Der Worker läuft im Klartext – typisch, wenn er **von Hand** gestartet wurde (ohne `--tls-self-signed`). Über die App starten schaltet die Verschlüsselung ein. |
+| „Datei ist zu gross …“ / „Datei-Cache des Workers ist voll …“ | Grenze überschritten | In der Worker-App *Einstellungen* die Werte erhöhen (oder den Cache des Workers leeren); die Meldung nennt Größe und Limit. |
 
 ## 7. Optional: eigenständiges Programm bauen
 

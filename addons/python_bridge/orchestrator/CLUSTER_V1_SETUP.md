@@ -11,8 +11,8 @@ Neu gegenueber der alten Anleitung:
 * **Keine vorbereiteten Skript-Ordner** – der Manager schickt den Python-Code
   selbst mit. Der Client braucht keine `scripts/`-Sammlung.
 * **Keine Router-Konfiguration, kein Docker, kein VPN** (fuer das eigene LAN).
-* **Verschluesselt ab Werk** – der Worker spricht `wss://` mit einem Zertifikat,
-  das er selbst erzeugt (Abschnitt 3b).
+* **Verschluesselt ab Werk** – die Worker-App startet den Worker mit `wss://` und
+  einem Zertifikat, das er selbst erzeugt (Abschnitt 3b).
 
 Es gibt genau zwei Rollen:
 
@@ -103,9 +103,16 @@ Quelle im Projekt:
 
 Es oeffnet sich die dunkle Worker-App. Beim ersten Start passiert automatisch:
 
-* ein **Token** wird erzeugt und in `worker_config.json` neben der App gespeichert,
+* ein **Token** wird erzeugt und in `worker_config.json` neben der App gespeichert
+  (Klartext – auf Rechnern mit mehreren Konten `chmod 600 worker_config.json`),
 * Name des Rechners und Ports werden vorgeschlagen,
-* „Automatisch im Netz sichtbar“ und „Automatische Kopplung“ sind aktiv.
+* „Automatisch im Netz sichtbar (Discovery)“ und „Automatische Kopplung
+  erlauben (bequem, weniger sicher)“ sind aktiv,
+* **„Verschluesselt (TLS)“** ist aktiv (siehe Abschnitt 3b).
+
+Die automatische Kopplung schickt das Token im Discovery-Beacon mit – das ist
+bequem im eigenen LAN, aber der Beacon ist **unverschluesselt** und TLS schuetzt
+ihn nicht. In fremden Netzen abschalten und das Token einmal eintragen.
 
 ### Schritt 3 – „Worker starten“ druecken
 
@@ -116,7 +123,9 @@ Im Log der App steht dann:
 
 ```text
 [orchestrator-worker] Discovery aktiv: MEIN-PC @ 192.168.1.42:8765 (UDP 8766, Auto-Pair: an)
-[orchestrator-worker] 'MEIN-PC' lauscht auf ws://0.0.0.0:8765
+[orchestrator-worker] 'MEIN-PC' lauscht auf wss://0.0.0.0:8765
+[orchestrator-worker] TLS aktiv (automatisch erzeugtes Zertifikat, TLS >= 1.2): …/tls/worker-cert.pem
+[orchestrator-worker] Zertifikat-SHA-256: 87:D0:2D:CE:7F:F2:4D:E3:…
 ```
 
 **Das ist alles.** Fenster offen lassen – der Worker laeuft im Hintergrund.
@@ -178,8 +187,14 @@ Datei waehlen  ->  Hash bilden  ->  nur bei Bedarf uebertragen  ->  pruefen
 
 1. Im Manager Datei/Projekt waehlen - wie bisher.
 2. Aufgabe starten. Ist die Datei noch nicht auf dem Zielrechner, uebertraegt
-der Manager sie in Stuecken und zeigt in der Aufgabenliste den Fortschritt
-(`Datei: model.dat   80 %`, danach `empfangen`).
+der Manager sie in Stuecken und zeigt unter der Aufgabenliste den Fortschritt:
+
+   ```text
+   Transfer model.dat: [#########-----------] 42 % -> MEIN-PC
+   ```
+
+   Danach steht dort `Transfer model.dat fertig (MEIN-PC).` – uebertragen wird
+   immer **eine** Datei nach der anderen.
 3. Erst wenn die Pruefsumme stimmt, geht der Auftrag an den Worker. Solange
 steht die Aufgabe auf **WAITING_FOR_DATA** - das ist kein Fehler, sondern die
 Gewaehr, dass kein Lauf mit halben Daten startet.
@@ -188,26 +203,30 @@ Gewaehr, dass kein Lauf mit halben Daten startet.
 zusaetzlich benannt:
 
 ```python
-name = input['_files'][0]      # z. B. "model.dat"
-data = open(name, 'rb').read()
+# "_files" = Liste der bereitgestellten Dateinamen im Arbeitsverzeichnis
+# (welches auch das Arbeitsverzeichnis des Programms ist).
+name = (input or {}).get('_files', ['model.dat'])[0]   # z. B. "model.dat"
+with open(name, 'rb') as f:
+    data = f.read()
 ```
 
 **Gute Nachricht fuer dauerhafte Nutzung:** Eine Datei wird ueber ihren
 **Inhalt** erkannt (SHA-256). Denselben Inhalt schickt der Manager **kein
 zweites Mal** - auch nicht an einen anderen Rechner, der ihn schon hat.
 
-**Grenzen** (bewusst, damit der Client-Rechner geschuetzt bleibt; einstellbar in
-der Worker-App unter „Groesste Eingabedatei“ und „Datei-Cache gesamt“):
+**Grenzen** (bewusst, damit der Client-Rechner geschuetzt bleibt):
 
 | Wert | Standard | Wo einstellen |
 |---|---|---|
-| Groesse pro Datei | 512 MB | Worker-App oder `--max-file-mb` |
-| Datei-Cache insgesamt | 4 GB | Worker-App oder `--max-cache-mb` |
-| freier Platz wird reserviert | 512 MB | Code-Konstante `min_free_bytes` |
+| Groesse **einer** Eingabedatei | 512 MB | Manager, fest (`MAX_FILE_BYTES`) – ein hoeherer Worker-Wert hilft hier nicht |
+| Groesse pro Datei auf dem Worker | 512 MB | Worker-App **„Groesste Eingabedatei (MB)“** oder `--max-file-mb` |
+| Datei-Cache insgesamt | 4096 MB | Worker-App **„Datei-Cache gesamt (MB)“** oder `--max-cache-mb` |
+| freier Plattenplatz, der bleiben muss | 512 MB | Code-Konstante `DEFAULT_MIN_FREE_BYTES` in `file_store.py` |
+| Dateien pro Aufgabe | 64 | fest (`_MAX_INPUT_FILES_PER_TASK`) |
 
-Wird eine Grenze ueberschritten, steht im Manager ein **konkreter Klartext**
-(z. B. „Datei ist zu gross (640.0 MB, Limit 512.0 MB) für den Transfer“) - es
-gibt kein stilles Scheitern.
+Wird eine Grenze ueberschritten, steht ein **konkreter Klartext** mit Groesse
+und Limit da – z. B. `Datei 'model.dat' ist zu gross fuer den Transfer
+(640 MB, Limit 512 MB).` Kein stilles Scheitern.
 
 Hintergruende, Schutzmassnahmen und die vollstaendige Liste der geprueften
 Risiken: [SAFETY.md](SAFETY.md).
@@ -219,10 +238,10 @@ Ansicht auf das reduzieren, was gerade interessiert.
 
 ## 3b. Verschluesselte Verbindung (TLS)
 
-Der Worker ist ab Version 0.4.0 **standardmaessig verschluesselt**: er erzeugt
-beim ersten Start selbst ein Zertifikat und lauscht auf `wss://`. Niemand muss
-`openssl`, Zertifikatsdateien oder Zusatzpakete besorgen - es geht auch auf
-einem nackten Windows ohne Git.
+Die Worker-App startet den Worker ab Version 0.4.0 **standardmaessig
+verschluesselt**: er erzeugt beim ersten Start selbst ein Zertifikat und lauscht
+auf `wss://`. Niemand muss `openssl`, Zertifikatsdateien oder Zusatzpakete
+besorgen - es geht auch auf einem nackten Windows ohne Git.
 
 ### Was passiert beim ersten Start
 
@@ -241,9 +260,10 @@ Zertifikat : .../tls/worker-cert.pem
 SHA-256    : 87:D0:2D:CE:7F:F2:4D:E3:...
 ```
 
-Derselbe Wert erscheint auch in der Worker-Karte des Managers. **Stimmen beide
-ueberein, ist es derselbe Rechner.** Das ist der einzige Vergleich, den ein
-Benutzer machen muss.
+Der Manager zeigt denselben Wert in der Worker-Karte – aber nur die **ersten 16
+Zeichen in Kleinbuchstaben** (`SHA-256 87d02dce7ff24de3...`), die App dagegen
+**alles in Grossbuchstaben mit Doppelpunkten**. Passen die 16 Zeichen, ist es
+derselbe Rechner.
 
 ### Zwei Wege, dem Zertifikat zu vertrauen
 
@@ -265,6 +285,7 @@ Manager merkt sich den Pfad.
 ```text
 TLS, Zertifikat angeheftet und geprueft         (gruen)  -> beste Variante
 TLS, verschluesselt (Zertifikat nicht geprueft) (gelb)  -> Freigabe aktiv
+TLS, Systemvertrauen (selbstsigniert scheitert) (gelb)  -> wss:// ohne Freigabe
 Ohne Verschluesselung (ws://)                   (grau)  -> Klartext
 ```
 
@@ -280,8 +301,12 @@ Zertifikate erlauben" einschalten oder das Zertifikat des Workers
 
 ### Ausnahmen
 
-* **Ohne TLS** (altes Verhalten): in der Worker-App das Haekchen *Verschluesselt
-  (TLS)* entfernen. Dann laeuft alles wieder ueber `ws://`.
+* **Ohne TLS** (altes Verhalten): in der Worker-App das Haekchen
+  *„Verschluesselt (TLS) - Zertifikat wird automatisch erzeugt“* entfernen.
+  Dann laeuft alles wieder ueber `ws://`. Wer den Worker dagegen **von Hand**
+  startet (`python orchestrator_worker.py --token …`), hat ohne
+  `--tls-self-signed` ohnehin Klartext – das TLS-Haekchen der App betrifft nur
+den von ihr gestarteten Prozess.
 * **Eigenes Zertifikat aus der eigenen PKI**: Worker mit `--tls-cert` und
   `--tls-key` starten (zwei PEM-Dateien) statt `--tls-self-signed`; im Manager
 die passende CA/Kette als Vertrauensdatei anheften.
@@ -311,20 +336,27 @@ Der Build muss **auf dem jeweiligen Zielsystem** erfolgen.
 
 ## 5. Netzwerk & Firewall
 
-| Richtung | Protokoll | Port | Wofuer |
-|---|---|---|---|
-| Client → Netz | UDP (Broadcast) | **8766** | Discovery („ich bin da“) |
-| Manager → Client | TCP | **8765** | Aufgaben, Ergebnisse |
+| Rechner | Richtung | Protokoll | Port | Wofuer |
+|---|---|---|---|---|
+| Client (Worker) | ausgehend | UDP (Broadcast) | **8766** | „ich bin da“ (Beacon) |
+| Client (Worker) | eingehend | TCP | **8765** | Aufgaben, Dateien, Ergebnisse |
+| Manager | eingehend | UDP | **8766** | Beacons empfangen |
+| Manager | ausgehend | TCP | 8765 | Verbindung aufbauen |
 
-Auf dem **Client-Rechner** muessen eingehend erlaubt sein:
+Der Worker bindet auf UDP einen **freien Port** – eingehend ist dort keine Regel
+noetig; entscheidend ist, dass sein **Broadcast nach draussen** durchgeht. Auf
+dem **Client-Rechner** also **eingehend TCP 8765** erlauben (und ausgehend
+UDP 8766). Windows fragt beim ersten Start normalerweise selbst nach – „Private
+Netzwerke“ erlauben.
 
-* UDP 8766 (damit der Manager ihn findet)
-* TCP 8765 (damit Aufgaben ankommen)
+Bei getrennten Netzen/AP-Isolation findet kein Broadcast statt; dann die Adresse
+im Manager manuell eintragen. Wichtig ist das Schema, es wird **woertlich**
+genommen:
 
-Windows fragt beim ersten Start normalerweise selbst nach – „Private
-Netzwerke“ erlauben. Bei getrennten Netzen/AP-Isolation findet kein Broadcast
-statt; dann die Adresse im Manager manuell eintragen (Feld
-`ws://<ip>:8765` + Token aus der Worker-App).
+```text
+wss://192.168.1.42:8765   + Token   -> Worker-App-Standard (verschluesselt)
+ws://192.168.1.42:8765    + Token   -> nur fuer einen Worker ohne TLS
+```
 
 Ports aendern: in der Worker-App (Port/Discovery) und im Manager
 (`discovery_port`).
@@ -335,17 +367,20 @@ Ports aendern: in der Worker-App (Port/Discovery) und im Manager
 
 * Der Worker **startet nicht ohne Token**. Das Token ist ein gemeinsames
   Geheimnis zwischen Manager und Client.
-* **Verschluesselung ist Standard** (siehe Abschnitt 3b): ab 0.4.0 spricht der
-  Worker `wss://` mit einem selbst erzeugten Zertifikat. Damit gehen Token,
-  Code und Ergebnisse nicht mehr im Klartext durch das Netz.
+* **Verschluesselung ist Standard in der Worker-App** (siehe Abschnitt 3b):
+ab 0.4.0 startet die App den Worker mit `wss://` und einem selbst erzeugten
+  Zertifikat. Damit gehen Token, Code und Ergebnisse nicht mehr im Klartext
+  durch das Netz. (Nur der **manuelle** Start auf der Kommandozeile braucht
+  ausdruecklich `--tls-self-signed`.)
 * Fuer **echte** Vertrauenspruefung das Zertifikat im Manager anheften
   (Knopf **Zertifikat** an der Worker-Karte). Ohne Anheften schuetzt TLS gegen
-  Mitlesen, aber nicht gegen einen aktiven Angreifer im selben Netz.
-* **Automatische Kopplung** („Auto-Pair“) ist bequem: das Token steht dann im
-  Discovery-Beacon, damit der Manager ohne Eingabe verbinden kann. Das ist fuer
-  ein **vertrautes eigenes LAN** gedacht. Mit TLS ist das Token unterwegs
-  verschluesselt; im Zweifel trotzdem abschalten und das Token einmalig
-  eintragen (Knopf **Token** an der Worker-Karte).
+  Mitlesen, aber nicht gegen einen aktiven Angreifer im selben Netz.* **Automatische Kopplung** („Auto-Pair“) ist bequem: das Token steht dann im
+  Discovery-Beacon, damit der Manager ohne Eingabe verbinden kann. Der Beacon
+  ist ein **unverschluesselter UDP-Broadcast** – TLS schuetzt ihn **nicht**;
+  wer im selben Netz mitschneidet, sieht das Token. Die App hat das
+  voreingestellt **an**; fuer ein vertrautes eigenes LAN gedacht, in fremden
+  Netzen abschalten und das Token einmalig eintragen (Knopf **Token** an der
+  Worker-Karte).
 * Fuer fremde Netze (Messe, Hotel-WLAN, Gaeste): „Automatische Kopplung“
   **abschalten** und zusaetzlich einen VPN-Tunnel benutzen.
 * Der Worker fuehrt Python-Code aus – auf Clients nur Worker verbinden lassen,
@@ -357,11 +392,11 @@ Ports aendern: in der Worker-App (Port/Discovery) und im Manager
 
 | Symptom | Ursache / Loesung |
 |---|---|
-| Kein Rechner erscheint | Client-App laeuft nicht, oder Firewall blockt UDP 8766. Kurz mit `nc -lup 8766` bzw. in der App pruefen, ob „Discovery aktiv“ im Log steht. |
+| Kein Rechner erscheint | Client-App laeuft nicht, oder die Firewall blockt den Broadcast. Im Worker-Log muss „Discovery aktiv: …“ stehen (sonst steht dort „Discovery inaktiv“ mit Grund). |
 | Cython-Aufgabe schlaegt fehl | In der Worker-App **„Umgebung prüfen“** druecken: sie zeigt in Klartext, ob Python, pip, venv und ein C-Compiler vorhanden sind. Fehlt der Compiler, steht der Installationsweg gleich darunter. |
 | Build wird jedes Mal neu gebaut | Der Projektordner aendert sich bei jedem Start (z. B. Zeitstempel im Code) - dann greift der Cache absichtlich nicht. |
-| „Projekt zu gross“ | Auftraege sind auf 3 MB begrenzt. Grosse Eingabedaten gehoeren in `input` bzw. folgen spaeter mit dem Datei-Transfer. |
-| Rechner erscheint, bleibt aber grau/rot | TCP 8765 geblockt, falsches Token, oder „Auto-Pair“ aus. Token im Manager nachtragen. |
+| „Projekt zu gross“ | Ein Auftrag ist auf 3 MB begrenzt (`max_payload_bytes`) – das betrifft den **Code/Projekttext**. Grosse **Eingabedaten** gehen ueber den Datei-Transfer (Abschnitt 3a), nicht als `input`. |
+| Rechner erscheint, bleibt aber grau/rot | TCP 8765 geblockt, falsches Token, oder die automatische Kopplung ist abgeschaltet. Token an der Worker-Karte ueber den Knopf **Token** nachtragen. |
 | „websockets installieren“ | Paket fehlt auf dem Client. Knopf in der App benutzen (braucht Internet). |
 | App startet nicht unter Linux | `python3-tk` fehlt (siehe Schritt 1). |
 | Nur Gastnetz/WLAN mit Isolation | Broadcast kommt nicht durch – Adresse manuell im Manager eintragen. |

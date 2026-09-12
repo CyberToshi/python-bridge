@@ -173,7 +173,9 @@ Ehrliche Standortbestimmung für die Weiterentwicklung:
   verschlüsselter Transport (`wss://`), Router mit Capacity Gate,
   Datei-Registry mit Chunk-Transfer und SHA-256-Prüfung, Wiederzuweisung nach
   Ausfall. Sie ist bewusst **transportunabhängig** – der Kern (Server-/Task-
-  Manager, Router, Dispatcher) weiß nichts vom Netz; nur
-  `OrchestratorTransport` spricht WebSocket.
+  Manager, Router, Dispatcher, Datei-Registry) weiß nichts vom Netz: nur
+  `OrchestratorTransport` spricht WebSocket, `OrchestratorFileTransfer` benutzt
+  ihn nur. Die Rechner-Erkennung liegt getrennt daneben
+  (`cluster_discovery.gd`, UDP).
 - Container-/Docker-Orchestrierung bleibt außen vor: das Modul ist für das
   eigene LAN gebaut, nicht für Cloud-Cluster.

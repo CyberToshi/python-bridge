@@ -105,18 +105,18 @@ if result.is_error():
 | Symptom | Ursache | Lösung |
 |---|---|---|
 | Kein Rechner erscheint | Client-App läuft nicht, oder Firewall blockt UDP 8766 | Worker-App starten; „Discovery aktiv“ muss im Worker-Log stehen ([Cluster aufsetzen](./cluster-setup)) |
-| Rechner gefunden, verbindet aber nicht | TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus | Token an der Worker-Karte nachtragen |
+| Rechner gefunden, verbindet aber nicht | TCP 8765 geblockt, falsches Token oder Auto-Pair abgeschaltet | Token über den Knopf **Token** an der Worker-Karte nachtragen |
 | „TLS-Handshake … fehlgeschlagen“ | Selbstsigniertes Zertifikat ohne Freigabe (Absicht, kein stiller Klartext-Rückfall) | Häkchen *Selbstsignierte Zertifikate erlauben* setzen oder `worker-cert.pem` anheften ([Cluster-Sicherheit](./cluster-sicherheit)) |
-| Karte zeigt „TLS, verschlüsselt (Zertifikat nicht geprüft)“ | Freigabe statt Anheften aktiv | Für echte Prüfung das Zertifikat anheften |
+| Karte zeigt „TLS, verschluesselt (Zertifikat nicht geprueft)“ | Freigabe statt Anheften aktiv (die Oberfläche schreibt ohne Umlaute) | Für echte Prüfung das Zertifikat anheften |
 | Fingerabdrücke stimmen nicht überein | Anderer Rechner oder Zertifikat wurde neu erzeugt (z. B. nach Löschen des Cache) | Zertifikat im Manager neu anheften |
 | Worker meldet „TLS nicht einsatzbereit“ und startet nicht | `--tls-cert`/`--tls-key` unvollständig oder unlesbar | Beide Dateien angeben oder auf das automatische Zertifikat umstellen |
 | Aufgabe bleibt `QUEUED` | Kein Rechner verbunden oder alle im Capacity Gate gesperrt (CPU/RAM/Queue) | Metriken im Cluster-Fenster ansehen |
 | Aufgabe zeigt „Daten werden übertragen“ | Eingabedatei ist noch unterwegs (`WAITING_FOR_DATA`) | Abwarten – das ist der normale Zustand, kein Fehler |
-| „Datei ist zu gross“ / „Datei-Cache des Workers ist voll“ | Grenzen der Worker-App | `--max-file-mb` / `--max-cache-mb` erhöhen oder Cache leeren |
+| „Datei ist zu gross“ / „Datei-Cache des Workers ist voll“ | Grenze überschritten – die Meldung nennt Größe und Limit | Cache-Wert in der Worker-App erhöhen oder Cache leeren. Achtung: eine **einzelne** Eingabedatei ist im Manager fest auf 512 MB begrenzt, ein höherer Worker-Wert hilft dagegen nicht ([Cluster aufsetzen](./cluster-setup)) |
 | „Prüfsumme stimmt nicht (SHA-256)“ | Netzwerk oder Platte fehlerhaft | Der Transfer wird begrenzt wiederholt und dann sauber abgebrochen; Protokoll lesen |
 | Cython-Aufgabe schlägt fehl | Kein C-Compiler / Paket fehlt | In der Worker-App **„Umgebung prüfen“** – zeigt Klartext plus Installationshinweis |
 | Build läuft jedes Mal neu | Projektordner ändert sich bei jedem Start (z. B. Zeitstempel im Code) | Cache greift dann absichtlich nicht; Zufallswerte aus dem Code nehmen |
-| Worker verschwindet nach kurzer Zeit | App geschlossen oder Standby | Neu starten; der Manager verbindet selbst wieder und holt offene Aufgaben nach |
+| Worker verschwindet nach kurzer Zeit | App geschlossen oder Standby | Neu starten; der Manager verbindet selbst wieder. Nicht quittierte Aufgaben werden neu bewertet und einem anderen Rechner zugewiesen – abgeschlossene werden **nicht** wiederholt |
 | Nur Gastnetz / AP-Isolation (kein Broadcast) | Discovery kommt nicht durch | Adresse im Cluster-Fenster von Hand eintragen: `wss://<ip>:8765` + Token |
 
 ## Noch Fragen?

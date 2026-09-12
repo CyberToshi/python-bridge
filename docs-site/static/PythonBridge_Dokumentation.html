@@ -1153,6 +1153,229 @@ höherpriorer Task, wird das Fenster sofort geschlossen.</p>
     &quot;retry_delay_ms&quot;: 500,
 })
 </code></pre>
+<h2>Cluster-Einstellungen</h2>
+
+<div class="adm adm-warning"><p class="adm-title">Eigene Konfiguration – nicht `PythonBridge.configure`</p><p>Alles oben gilt für die <strong>lokale</strong> Bridge (<code>PythonBridge.configure</code>). Das
+Cluster-Modul hat eine <strong>eigene</strong> Konfiguration; die Schlüssel unten setzt man
+mit <code>ClusterManager.configure(...)</code> (vor <em>oder</em> nach <code>add_child</code>).
+Schlüssel wie <code>max_retries</code> gibt es in <strong>beiden</strong> – sie bedeuten dort aber
+nicht dasselbe.</p>
+</div>
+<pre><code class="language-gdscript">cluster.configure({
+    &quot;cpu_block_pct&quot;: 90.0,          # früher sperren
+    &quot;queue_capacity&quot;: 12,           # mehr gleichzeitige Aufgaben annehmen
+    &quot;tls_allow_self_signed&quot;: true,  # selbstsignierte Zertifikate erlauben
+    &quot;max_retries&quot;: 3,               # Wiederholungen je Aufgabe
+})
+</code></pre>
+<p>Unbekannte Schlüssel werden ignoriert (vorwärtskompatibel), Werte werden
+begrenzt: <code>unresponsive_ms</code> liegt immer über <code>heartbeat_interval_ms</code>, und die
+READY-Schwelle kann die BLOCK-Schwelle nicht überschreiten – sonst gäbe es
+keine Hysterese.</p>
+<p>Nicht über <code>configure()</code> laufen die <strong>Node-Einstellungen</strong> des
+<code>ClusterManager</code> – die stehen im Inspektor (oder als <code>@export</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Feld</th>
+<th>Standard</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>auto_discover</code></td>
+<td><code>true</code></td>
+<td>Rechner automatisch per Broadcast suchen.</td>
+</tr>
+<tr>
+<td><code>discovery_port</code></td>
+<td><code>8766</code></td>
+<td>UDP-Port der Suche.</td>
+</tr>
+<tr>
+<td><code>auto_connect</code></td>
+<td><code>true</code></td>
+<td>Gefundene Rechner sofort verbinden.</td>
+</tr>
+<tr>
+<td><code>worker_token</code></td>
+<td><code>&quot;&quot;</code></td>
+<td>Token für Rechner, die keins im Beacon mitsenden.</td>
+</tr>
+<tr>
+<td><code>tls_allow_self_signed</code></td>
+<td><code>false</code></td>
+<td>Selbstsignierte Zertifikate erlauben (siehe unten).</td>
+</tr>
+<tr>
+<td><code>tls_ca_path</code></td>
+<td><code>&quot;&quot;</code></td>
+<td>Angeheftetes Zertifikat (PEM) für alle Rechner.</td>
+</tr>
+<tr>
+<td><code>mirror_scene</code></td>
+<td><code>false</code></td>
+<td>Legt einen Kind-Node <code>ClusterMirror</code> an, darunter je Rechner <code>Worker_&lt;id&gt;</code> und je Aufgabe <code>Task_&lt;id&gt;</code>. Der jeweilige Zustand steht als <code>get_meta(&quot;cluster&quot;)</code> bereit – so lässt sich der Cluster wie ein normales Node-System abfragen.</td>
+</tr>
+<tr>
+<td><code>state_path</code></td>
+<td><code>user://cluster_workers.json</code></td>
+<td>Wo gemerkte Rechner und Token liegen.</td>
+</tr>
+</tbody></table>
+<h3>Erreichbarkeit</h3>
+<table>
+<thead>
+<tr>
+<th>Schlüssel</th>
+<th>Standard</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>heartbeat_interval_ms</code></td>
+<td><code>2000</code></td>
+<td>Abstand der Lebenszeichen des Workers.</td>
+</tr>
+<tr>
+<td><code>unresponsive_ms</code></td>
+<td><code>6000</code></td>
+<td>Ohne Lebenszeichen so lange → Rechner wird <code>UNRESPONSIVE</code>.</td>
+</tr>
+<tr>
+<td><code>disconnected_ms</code></td>
+<td><code>20000</code></td>
+<td>Danach gilt die Verbindung als getrennt.</td>
+</tr>
+</tbody></table>
+<h3>Kapazität (Capacity Gate)</h3>
+<table>
+<thead>
+<tr>
+<th>Schlüssel</th>
+<th>Standard</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>queue_capacity</code></td>
+<td><code>8</code></td>
+<td>Wie viele Aufgaben ein Rechner gleichzeitig annehmen darf.</td>
+</tr>
+<tr>
+<td><code>cpu_block_pct</code></td>
+<td><code>85.0</code></td>
+<td>Ab dieser CPU-Last sperrt der Rechner (<code>BLOCKED</code>).</td>
+</tr>
+<tr>
+<td><code>cpu_ready_pct</code></td>
+<td><code>70.0</code></td>
+<td>Darunter ist er wieder <code>READY</code> (Hysterese).</td>
+</tr>
+<tr>
+<td><code>ram_block_pct</code></td>
+<td><code>90.0</code></td>
+<td>Wie <code>cpu_block_pct</code>, für den Arbeitsspeicher.</td>
+</tr>
+<tr>
+<td><code>ram_ready_pct</code></td>
+<td><code>75.0</code></td>
+<td>Wie <code>cpu_ready_pct</code>, für den Arbeitsspeicher.</td>
+</tr>
+</tbody></table>
+<p>Laufende Aufgaben werden nie abgebrochen, nur weil ein Rechner gesperrt wird.</p>
+<h3>Aufgaben, Versuche, Zuweisung</h3>
+<table>
+<thead>
+<tr>
+<th>Schlüssel</th>
+<th>Standard</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>task_timeout_ms</code></td>
+<td><code>120000</code></td>
+<td>Obergrenze für eine Aufgabe im Manager.</td>
+</tr>
+<tr>
+<td><code>max_retries</code></td>
+<td><code>2</code></td>
+<td>Zusätzliche Versuche je Aufgabe.</td>
+</tr>
+<tr>
+<td><code>retry_delay_ms</code></td>
+<td><code>500</code></td>
+<td>Wartezeit vor einem erneuten Versuch.</td>
+</tr>
+<tr>
+<td><code>ack_timeout_ms</code></td>
+<td><code>10000</code></td>
+<td>So lange darf die Quittung des Workers dauern.</td>
+</tr>
+<tr>
+<td><code>max_dispatch_per_tick</code></td>
+<td><code>8</code></td>
+<td>Höchstens so viele Startversuche je Durchlauf.</td>
+</tr>
+<tr>
+<td><code>max_payload_bytes</code></td>
+<td><code>3145728</code> (3 MB)</td>
+<td>Obergrenze eines Auftrags (Projekt/Code als Text).</td>
+</tr>
+</tbody></table>
+<h3>Routing (Router-Gewichte)</h3>
+<table>
+<thead>
+<tr>
+<th>Schlüssel</th>
+<th>Standard</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>router_locality_bonus</code></td>
+<td><code>60.0</code></td>
+<td>Vorteil, wenn die Datei schon auf dem Rechner liegt.</td>
+</tr>
+<tr>
+<td><code>router_latency_penalty_per_ms</code></td>
+<td><code>0.5</code></td>
+<td>Abzug je Millisekunde Latenz.</td>
+</tr>
+<tr>
+<td><code>router_load_weight</code></td>
+<td><code>1.0</code></td>
+<td>Gewicht der Auslastung.</td>
+</tr>
+</tbody></table>
+<p>Höherer Wert = stärkerer Einfluss. Größerer <code>router_locality_bonus</code> schickt
+Aufgaben lieber dorthin, wo die Daten schon liegen (siehe <a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a>).</p>
+<h3>Sicherheit</h3>
+<table>
+<thead>
+<tr>
+<th>Schlüssel</th>
+<th>Standard</th>
+<th>Bedeutung</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>worker_token</code></td>
+<td><code>&quot;&quot;</code></td>
+<td>Shared Secret. Wird für die Discovery automatisch übernommen; im Beacon steht es nur mit Auto-Pair. Taucht <strong>nicht</strong> in <code>describe()</code> auf.</td>
+</tr>
+<tr>
+<td><code>tls_ca_path</code></td>
+<td><code>&quot;&quot;</code></td>
+<td>Angeheftetes Zertifikat (PEM) → echte Prüfung.</td>
+</tr>
+<tr>
+<td><code>tls_allow_self_signed</code></td>
+<td><code>false</code></td>
+<td>Selbstsignierte Zertifikate bewusst erlauben. <strong>Standard aus</strong> – deshalb scheitert die erste <code>wss://</code>-Verbindung sichtbar, bis das Häkchen gesetzt oder ein Zertifikat angeheftet ist.</td>
+</tr>
+</tbody></table>
 <h2>Details zu schwierigen Schlüsseln</h2>
 <p><strong><code>max_inflight_per_instance</code> + <code>workers_per_instance</code>:</strong> Beide steuern
 Parallelität. <code>workers_per_instance</code> bestimmt die Threads im Python-Prozess,
@@ -1697,19 +1920,55 @@ Fortschrittsbalken und die Diagnose.</p>
     ├── Task(s)       Python-Aufgaben inkl. Zustandsautomat
     └── Scheduler     Router + Dispatcher + Transport
 </code></pre>
-<p>Wer keine Oberfläche braucht, benutzt den Manager direkt:</p>
+<p>Wer keine Oberfläche braucht, benutzt den Manager direkt. Zwei Dinge sind am
+Beispiel wichtig zu verstehen:</p>
+<ul>
+<li>Der <strong>erste Parameter ist nur der Anzeigename</strong> der Aufgabe – kein Dateipfad,
+den es auf dem Worker geben müsste. Er steht später in der Tabelle und im
+Protokoll.</li>
+<li>Ausgeführt wird, was in <code>source</code> steht (oder die übertragene Projektdatei).
+Der Worker legt dafür ein eigenes Arbeitsverzeichnis an.</li>
+</ul>
 <pre><code class="language-gdscript">var cluster := ClusterManager.new()
-add_child(cluster)
+add_child(cluster)   # startet Discovery und lädt gemerkte Rechner
 cluster.task_finished.connect(func(task_id: String, ok: bool, value: Variant, error: String) -&gt; void:
     print(task_id, &quot; → &quot;, ok, &quot; &quot;, value, &quot; &quot;, error))
 
-# Aufgabe mit übertragenem Python-Code (auf dem Worker liegt keine Datei)
+# &quot;mein_lauf&quot; ist der Name; der Code kommt aus &quot;source&quot; mit.
+# command &quot;run&quot;: der Code liest `input` und setzt `result`.
 cluster.submit_script(&quot;mein_lauf&quot;, {
     &quot;command&quot;: &quot;run&quot;,
     &quot;input&quot;: {&quot;werte&quot;: [1, 2, 3]},
     &quot;source&quot;: &quot;result = sum(input[&#39;werte&#39;])&quot;,
 })
 </code></pre>
+<p>Für den Alltag gibt es passende Kurzwege – statt Code als Text zu übergeben:</p>
+<table>
+<thead>
+<tr>
+<th>Aufruf</th>
+<th>Was passiert</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>submit_project_dir(&quot;res://mein_projekt&quot;)</code></td>
+<td>liest den Ordner (nur Textdateien, ohne <code>venv</code>/<code>__pycache__</code>), bestimmt den Einstieg (<code>main.py</code>, <code>app.py</code>, …) und lässt bauen, falls nötig</td>
+</tr>
+<tr>
+<td><code>submit_script_file(&quot;res://scripts/bench.py&quot;, {...})</code></td>
+<td>eine einzelne Datei als Aufgabe</td>
+</tr>
+<tr>
+<td><code>submit_with_files({...}, [&quot;res://daten/modell.dat&quot;])</code></td>
+<td>Aufgabe <strong>plus</strong> Eingabedateien; übernimmt Registrierung und Transfer</td>
+</tr>
+<tr>
+<td><code>cancel_task(task_id)</code></td>
+<td>bricht Aufgabe und laufenden Datei-Transfer ab</td>
+</tr>
+</tbody></table>
+<p><code>call</code> statt <code>run</code>: dann wird eine Funktion im Code aufgerufen – dazu <code>function</code>
+und optional <code>args</code>/<code>kwargs</code> setzen. <code>input</code> gibt es nur bei <code>run</code>.</p>
 <h2>Was das Modul übernimmt</h2>
 <table>
 <thead>
@@ -1720,7 +1979,7 @@ cluster.submit_script(&quot;mein_lauf&quot;, {
 </thead>
 <tbody><tr>
 <td><strong>LAN-Discovery</strong></td>
-<td>UDP-Broadcast: Rechner finden sich selbst. Keine IP, kein Port zum Eintippen.</td>
+<td>UDP-Broadcast: Rechner finden sich selbst. Keine IP, kein Port zum Eintippen. Der Beacon ist <strong>nicht</strong> verschlüsselt – deshalb ist Auto-Pair eine bewusste Entscheidung (<a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>).</td>
 </tr>
 <tr>
 <td><strong>Worker-Transport</strong></td>
@@ -1728,7 +1987,7 @@ cluster.submit_script(&quot;mein_lauf&quot;, {
 </tr>
 <tr>
 <td><strong>Capacity Gate</strong></td>
-<td>Ein Rechner nimmt nur so viele Aufgaben an, wie seine Grenzen (CPU/RAM/Queue) zulassen – mit Hysterese, damit der Zustand nicht flattert.</td>
+<td>Ein Rechner nimmt nur so viele Aufgaben an, wie seine Grenzen (CPU/RAM/Queue) zulassen. Zustände je Rechner: <code>READY</code> (nimmt an), <code>LIMITED</code> (knapp, nimmt noch an), <code>BLOCKED</code> (gesperrt), <code>UNRESPONSIVE</code> (Heartbeat fehlt), <code>DISCONNECTED</code>. Mit Hysterese: die Freigabe aus <code>BLOCKED</code> kommt erst <strong>unter</strong> der READY-Schwelle, damit der Zustand nicht flattert.</td>
 </tr>
 <tr>
 <td><strong>Router</strong></td>
@@ -1752,7 +2011,7 @@ cluster.submit_script(&quot;mein_lauf&quot;, {
 </tr>
 <tr>
 <td><strong>TLS</strong></td>
-<td>Standardmäßig verschlüsselt; Zertifikat entsteht automatisch. Siehe <a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>.</td>
+<td>In der Worker-App standardmäßig verschlüsselt (<code>ws://</code> nur, wenn der Worker von Hand ohne TLS gestartet wird); Zertifikat entsteht automatisch. Siehe <a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>.</td>
 </tr>
 <tr>
 <td><strong>Monitoring</strong></td>
@@ -1765,8 +2024,9 @@ cluster.submit_script(&quot;mein_lauf&quot;, {
 <li>Kein Ersatz für die lokale Instanz: die normale
 <a href="https://cybertoshi.github.io/python-bridge/docs/getting-started">Python Bridge</a> arbeitet unverändert weiter.</li>
 <li>Keine Sandbox: übertragener Code läuft mit den Rechten des Worker-Benutzers.</li>
-<li>Kein Fairness-/Prioritätssystem über mehrere Hauptrechner – ein Manager
-steuert, mehrere Rechner rechnen.</li>
+<li>Keine ausgleichende Fairness über mehrere Manager: <strong>ein</strong> Manager steuert die
+Rechner, die er kennt. Prioritäten (<code>LOW</code>/<code>NORMAL</code>/<code>HIGH</code>) gibt es je Aufgabe,
+sie ordnen nur die Warteschlange <strong>innerhalb</strong> dieses Managers.</li>
 </ul>
 <h2>Weiterlesen</h2>
 <ol>
@@ -1821,9 +2081,11 @@ panel.manager.task_finished.connect(func(id: String, ok: bool, value: Variant, e
 <li><strong>Python installieren</strong>, falls noch nicht vorhanden (unter Linux zusätzlich
 <code>python3-tk</code>, sonst startet die Oberfläche nicht). Das ist die einzige
 Voraussetzung – Compiler, Cython, Docker, Zusatzpakete sind <strong>nicht</strong> nötig.</li>
-<li>Addon-Ordner aus dem Addon-ZIP bzw. dem Repository auf den Rechner kopieren
-(<code>addons/python_bridge/orchestrator/worker/</code>) – oder das fertige
-<code>PythonBridge-Worker-*.zip</code> entpacken.</li>
+<li>Worker-Paket auf den Rechner kopieren: den Ordner
+<code>addons/python_bridge/orchestrator/worker/</code> (aus Addon-ZIP oder Repository)
+oder das fertige <code>PythonBridge-Worker-*.zip</code> aus <code>versions/</code> entpacken. Das
+Paket ist eigenständig – <strong>Godot und das Addon sind auf dem Client nicht
+nötig.</strong></li>
 <li>Starten:<ul>
 <li><strong>Windows:</strong> Doppelklick auf <code>Worker-Windows.bat</code></li>
 <li><strong>Linux:</strong> <code>./start_worker_linux.sh</code></li>
@@ -1851,9 +2113,19 @@ Anzeige daneben nennt Anzahl und Gesamtgröße.</li>
 <li>Optional Ziel-Rechner wählen („Automatisch“ = der Router entscheidet).</li>
 <li><strong>Aufgabe starten</strong>.</li>
 </ol>
-<p>Die Tabelle zeigt danach: Status, Fortschritt (<code>env</code>, <code>build</code>, <code>run</code> bzw.
-„Daten werden übertragen“), Rechner, Versuch, Build (<code>neu gebaut</code> / <code>Cache</code>)
-und Ergebnis.</p>
+<p>Die Tabelle zeigt danach: Name, Status, Fortschritt, Rechner, Versuch, Build und
+Ergebnis.</p>
+<ul>
+<li><strong>Fortschritt:</strong> die Stufe plus Prozent – <code>detect</code> (Projekt prüfen), <code>env</code>
+(Umgebung), <code>deps</code> (Abhängigkeiten), <code>build</code> (kompilieren), <code>run</code> (Programm
+starten). Vor dem Start steht dort „Daten werden uebertragen“; ohne
+Fortschrittsmeldung „wartet“.</li>
+<li><strong>Versuch:</strong> <code>verbraucht/erlaubt</code>, z. B. <code>1/3</code> (ein Versuch, zwei Wiederholungen).</li>
+<li><strong>Build:</strong> <code>neu gebaut</code> oder <code>Cache</code> (unverändertes Projekt wurde nicht neu
+kompiliert).</li>
+<li><strong>Ergebnis:</strong> Fehlermeldung bzw. Rückgabe; Maus darüber zeigt den Hinweis aus
+der Zeile <code>Loesung:</code> des Workers.</li>
+</ul>
 <h3>Der Ablauf im Hintergrund</h3>
 <pre><code class="language-text">Task anlegen
       │
@@ -1877,18 +2149,72 @@ Status, Fortschritt und Ergebnis zurück → Task COMPLETED
 der Auftrag verschickt,</li>
 <li>ist die Datei schon vorhanden (auch von einem früheren Lauf), findet <strong>kein</strong>
 Transfer statt,</li>
-<li>im Programm liegen die Dateien im Arbeitsverzeichnis und zusätzlich benannt:</li>
+<li>im Programm liegen sie im <strong>Arbeitsverzeichnis</strong> – und <code>input[&quot;_files&quot;]</code>
+nennt ihre Namen, damit kein Skript raten muss, wie die Datei hier heißt:</li>
 </ul>
-<pre><code class="language-python">name = (input or {}).get(&quot;_files&quot;, [&quot;daten.dat&quot;])[0]
-data = open(name, &quot;rb&quot;).read()
+<pre><code class="language-python"># &quot;_files&quot; = Liste der bereitgestellten Dateinamen im Arbeitsverzeichnis.
+# Der Name auf dem Client kann anders sein als in deinem Projekt.
+name = (input or {}).get(&quot;_files&quot;, [&quot;daten.dat&quot;])[0]
+with open(name, &quot;rb&quot;) as f:
+    data = f.read()
 </code></pre>
-<p>Grenzen (in der Worker-App einstellbar): <strong>Größe pro Datei</strong> (Standard 512 MB)
-und <strong>Datei-Cache gesamt</strong> (Standard 4 GB). Wird eine Grenze überschritten,
-steht im Protokoll ein konkreter Satz – kein stilles Scheitern.</p>
+<p>Grenzen – und <strong>welche</strong> gerade greift, ist wichtig:</p>
+<table>
+<thead>
+<tr>
+<th>Grenze</th>
+<th>Wo festgelegt</th>
+<th>Standard</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Größe einer Eingabedatei</td>
+<td>Manager (<code>MAX_FILE_BYTES</code>, fest)</td>
+<td>512 MB</td>
+</tr>
+<tr>
+<td>Größe pro Datei auf dem Worker</td>
+<td>Worker-App: <strong>Groesste Eingabedatei (MB)</strong></td>
+<td>512 MB</td>
+</tr>
+<tr>
+<td>Datei-Cache des Workers gesamt</td>
+<td>Worker-App: <strong>Datei-Cache gesamt (MB)</strong></td>
+<td>4096 MB</td>
+</tr>
+<tr>
+<td>Dateien pro Aufgabe</td>
+<td>Worker (fest)</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Inline-<code>source</code> im Auftrag</td>
+<td>Worker (fest)</td>
+<td>2 MB</td>
+</tr>
+<tr>
+<td><code>input</code>/<code>args</code>/<code>kwargs</code></td>
+<td>Worker (fest)</td>
+<td>1 MB</td>
+</tr>
+<tr>
+<td>Ein Auftrag auf der Leitung</td>
+<td>Manager <code>max_payload_bytes</code></td>
+<td>3 MB</td>
+</tr>
+</tbody></table>
+<p>Eine einzelne Datei über <strong>512 MB geht nicht</strong>, auch wenn der Worker-Wert höher
+gesetzt wird – der Manager lehnt sie schon beim Registrieren ab und sagt das im
+Protokoll. Der Worker prüft dieselbe Größe zusätzlich beim Empfangen. Wird eine
+Grenze überschritten, steht ein konkreter Satz mit Größe und Limit im
+Protokoll – kein stilles Scheitern.</p>
+<p>Übertragen wird <strong>eine Datei nach der anderen</strong>; die Fortschrittsbalken laufen
+deshalb nacheinander, nicht parallel.</p>
 <h2>5. Firewall</h2>
 <table>
 <thead>
 <tr>
+<th>Rechner</th>
 <th>Richtung</th>
 <th>Protokoll</th>
 <th>Port</th>
@@ -1896,23 +2222,50 @@ steht im Protokoll ein konkreter Satz – kein stilles Scheitern.</p>
 </tr>
 </thead>
 <tbody><tr>
-<td>Client → Netz</td>
+<td>Client (Worker)</td>
+<td><strong>ausgehend</strong></td>
 <td>UDP (Broadcast)</td>
 <td><strong>8766</strong></td>
-<td>Discovery („ich bin da“)</td>
+<td>„ich bin da“ (Beacon)</td>
 </tr>
 <tr>
-<td>Manager → Client</td>
+<td>Client (Worker)</td>
+<td><strong>eingehend</strong></td>
 <td>TCP</td>
 <td><strong>8765</strong></td>
 <td>Aufgaben, Dateien, Ergebnisse</td>
 </tr>
+<tr>
+<td>Hauptrechner (Manager)</td>
+<td><strong>eingehend</strong></td>
+<td>UDP</td>
+<td><strong>8766</strong></td>
+<td>Beacons der Rechner empfangen</td>
+</tr>
+<tr>
+<td>Hauptrechner (Manager)</td>
+<td>ausgehend</td>
+<td>TCP</td>
+<td>8765</td>
+<td>zur Gegenstelle verbinden</td>
+</tr>
 </tbody></table>
-<p>Auf dem <strong>Client-Rechner</strong> eingehend erlauben: UDP 8766 und TCP 8765. Windows
-fragt beim ersten Start selbst – „Private Netzwerke“ genügt.</p>
+<p>Der Worker bindet auf der UDP-Seite einen <strong>freien Port</strong> – dort ist <em>eingehend</em>
+keine Regel nötig; entscheidend ist, dass sein <strong>Broadcast nach draußen</strong>
+durchgeht. Auf dem Client-Rechner also <strong>eingehend TCP 8765</strong> erlauben (und
+ausgehend UDP 8766). Windows fragt beim ersten Start selbst – „Private
+Netzwerke“ genügt.</p>
+<p>Wenn gar nichts passiert, obwohl TCP erlaubt ist: zuerst prüfen, ob der Router
+den Broadcast blockiert (Gastnetz/AP-Isolation) – dann von Hand eintragen.</p>
 <p>Klappt kein Broadcast (Gastnetz, AP-Isolation), trägt man den Rechner im
 Cluster-Fenster einmal von Hand ein: <code>wss://&lt;ip&gt;:8765</code> plus Token aus der
-Worker-App.</p>
+Worker-App. Wichtig ist das Schema – die Adresse wird <strong>wörtlich</strong> genommen:</p>
+<ul>
+<li><code>wss://</code> → verschlüsselt (Worker-App-Standard). Ein selbstsigniertes
+Zertifikat braucht zusätzlich die Freigabe oder das angeheftete Zertifikat.</li>
+<li><code>ws://</code> → unverschlüsselt; passt nur zu einem Worker, der ohne TLS läuft,
+und ist mit einem TLS-Worker gar nicht möglich (der Handshake scheitert).</li>
+</ul>
 <h2>6. Fehlersuche</h2>
 <table>
 <thead>
@@ -1923,11 +2276,11 @@ Worker-App.</p>
 </thead>
 <tbody><tr>
 <td>Kein Rechner erscheint</td>
-<td>Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Fenster steht „Discovery aktiv“, wenn die Meldung rausgeht.</td>
+<td>Client-App läuft nicht, oder die Firewall blockt UDP 8766. Im Worker-Log steht „Discovery aktiv“, sobald die Meldungen rausgehen („Discovery inaktiv“ nennt sonst den Grund).</td>
 </tr>
 <tr>
 <td>Rechner erscheint, bleibt aber grau/rot</td>
-<td>TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus. Token an der Worker-Karte nachtragen.</td>
+<td>TCP 8765 geblockt, falsches Token, oder die automatische Kopplung ist abgeschaltet. Token an der Worker-Karte nachtragen (Knopf <strong>Token</strong>).</td>
 </tr>
 <tr>
 <td>„TLS-Handshake … fehlgeschlagen“</td>
@@ -1951,7 +2304,15 @@ Worker-App.</p>
 </tr>
 <tr>
 <td>Worker verschwindet</td>
-<td>App geschlossen oder Standby. Einfach neu starten – der Manager verbindet selbst wieder.</td>
+<td>App geschlossen oder Standby. Einfach neu starten – der Manager verbindet selbst wieder. Nach 8 s ohne Beacon gilt der Rechner als verschwunden, nach 6 s ohne Heartbeat als <code>UNRESPONSIVE</code>.</td>
+</tr>
+<tr>
+<td>Karte zeigt „Ohne Verschluesselung (ws://)“</td>
+<td>Der Worker läuft im Klartext – typisch, wenn er <strong>von Hand</strong> gestartet wurde (ohne <code>--tls-self-signed</code>). Über die App starten schaltet die Verschlüsselung ein.</td>
+</tr>
+<tr>
+<td>„Datei ist zu gross …“ / „Datei-Cache des Workers ist voll …“</td>
+<td>Grenze überschritten</td>
 </tr>
 </tbody></table>
 <h2>7. Optional: eigenständiges Programm bauen</h2>
@@ -1979,7 +2340,9 @@ lassen, denen du die Rechenzeit auch geben willst.</li>
 <h1>Cluster-Sicherheit (Token &amp; TLS)</h1>
 <p>Ein Worker führt Python-Code aus, den der Hauptrechner schickt. Das ist die
 gewollte Funktion – und genau deshalb gibt es zwei Schutzschichten:
-<strong>Token</strong> (wer darf verbinden) und <strong>TLS</strong> (was sieht das Netz).</p>
+<strong>Token</strong> (wer darf verbinden) und <strong>TLS</strong> (was sieht das Netz). Beide haben
+genau umrissene Grenzen; die wichtigste steht in Abschnitt 1 und betrifft die
+Rechner-Erkennung, nicht die Verbindung.</p>
 <h2>1. Token: ohne geht es nicht</h2>
 <ul>
 <li>Der Worker <strong>startet nicht ohne Token</strong> (16–256 Zeichen,
@@ -1990,23 +2353,55 @@ gewollte Funktion – und genau deshalb gibt es zwei Schutzschichten:
 Zeitfenster). Vor der Anmeldung wird <strong>kein</strong> Frame verarbeitet.</li>
 <li>Token wie ein Passwort behandeln: nicht per Chat/Mail weitergeben.</li>
 </ul>
-<p><strong>Auto-Pair:</strong> Damit der Manager ohne Eingabe verbinden kann, kann der Worker
-sein Token im Discovery-Beacon mitsenden – bequem im vertrauten LAN. Mit TLS
-ist der Beacon-Inhalt unterwegs verschlüsselt; in fremden Netzen trotzdem
-besser abschalten und das Token einmalig an der Worker-Karte eintragen.</p>
-<h2>2. TLS: verschlüsselt ab Werk</h2>
-<p>Ab Version 0.4.0 läuft der Worker <strong>standardmäßig verschlüsselt</strong> (<code>wss://</code>)
-und erzeugt sein Zertifikat beim ersten Start <strong>selbst</strong>:</p>
+<p><strong>Auto-Pair – hier ist Vorsicht angebracht:</strong> Damit der Manager ohne Eingabe
+verbinden kann, darf der Worker sein Token im Discovery-Beacon mitsenden. Der
+Beacon ist ein <strong>unverschlüsselter UDP-Broadcast</strong>: er ist <em>nicht</em> durch TLS
+geschützt, sondern geht im Klartext durchs Netz. Wer im selben Netz
+mithört, sieht das Token – und das Token ist der Schlüssel zum Ausführen von
+Code.</p>
+<blockquote>
+<p>TLS schützt die WebSocket-Verbindung, <strong>nicht</strong> den Discovery-Beacon.</p>
+</blockquote>
+<p>Standard der Worker-App: <strong>Auto-Pair ist an</strong> (<code>&quot;auto_pair&quot;: true</code>), damit der
+erste Start ohne Eintippen funktioniert. In einem Netz, dem du nicht vertraust,
+das Häkchen <strong>„Automatische Kopplung erlauben (bequem, weniger sicher)“</strong>
+entfernen und das Token einmalig an der Worker-Karte eintragen. (Das daneben
+liegende Häkchen <em>Automatisch im Netz sichtbar (Discovery)</em> schaltet nur die
+Suche selbst ab – dann findet der Manager den Rechner gar nicht mehr.)</p>
+<pre><code class="language-text">Auto-Pair an   Token reist im Klartext-Beacon mit   bequem, nur vertrautes LAN
+Auto-Pair aus  Token muss im Manager eingetippt werden   sicherer
+</code></pre>
+<p>Auch das Token selbst liegt auf dem Worker im Klartext in der Datei
+<code>worker_config.json</code> neben der App – sie wird ohne besondere Dateirechte
+angelegt. Auf Rechnern mit mehreren Benutzerkonten also eigene Rechte setzen
+(<code>chmod 600 worker_config.json</code>).</p>
+<h2>2. TLS: in der Worker-App Standard, auf der Kommandozeile nicht</h2>
+<p>Die <strong>Worker-App</strong> startet den Worker ab Version 0.4.0 standardmäßig
+verschlüsselt (<code>wss://</code>): das Häkchen heißt
+<em>„Verschluesselt (TLS) - Zertifikat wird automatisch erzeugt“</em> und ist
+voreingestellt. Wer den Worker dagegen <strong>von Hand auf der Kommandozeile</strong>
+startet, bekommt weiterhin Klartext – <code>--tls-self-signed</code> muss dort
+ausdrücklich angegeben werden:</p>
+<pre><code class="language-bash">python orchestrator_worker.py --token &quot;$TOKEN&quot; --tls-self-signed   # verschlüsselt
+python orchestrator_worker.py --token &quot;$TOKEN&quot;                     # ws:// – Klartext
+</code></pre>
+<p>Im Klartext-Betrieb meldet der Beacon <code>ws://</code>; der Manager verbindet dann
+unverschlüsselt. Das passiert nicht heimlich – aber die Entscheidung trifft die
+Startart des Workers, nicht der Manager.</p>
+<p>Das Zertifikat entsteht beim ersten Start <strong>selbst</strong>; es liegt im Cache des
+Workers unter <code>tls/</code>:</p>
 <ul>
 <li>reine Standardbibliothek – kein <code>openssl</code>, kein <code>cryptography</code>, kein
 Terminal, auch auf einem nackten Windows,</li>
-<li>RSA-2048, gültig 825 Tage, danach still erneuert,</li>
+<li>RSA-2048, gültig 825 Tage; erneuert wird <strong>sieben Tage vor Ablauf</strong>
+(Zeitpunkt in <code>tls/worker-cert.json</code>),</li>
 <li>der <strong>private Schlüssel verlässt den Rechner nie</strong> (Dateirechte <code>0600</code>),</li>
 <li>TLS &lt; 1.2 wird abgelehnt,</li>
-<li>der Discovery-Beacon meldet <code>wss://</code> <strong>und</strong> den SHA-256-Fingerabdruck.</li>
+<li>der Discovery-Beacon meldet <code>wss://</code> <strong>und</strong> den SHA-256-Fingerabdruck des
+Zertifikats.</li>
 </ul>
-<p>Der Manager verbindet sich daraufhin automatisch verschlüsselt. Ist die
-Vertrauensart nicht gesetzt, scheitert der Handshake <strong>sichtbar</strong>:</p>
+<p>Der Manager erkennt <code>wss://</code> am Beacon und verbindet automatisch verschlüsselt.
+Ist die Vertrauensart nicht gesetzt, scheitert der Handshake <strong>sichtbar</strong>:</p>
 <pre><code class="language-text">TLS-Problem bei Worker_1: TLS-Handshake mit Worker_1 fehlgeschlagen. Bei einem
 selbstsignierten Zertifikat: in den Cluster-Einstellungen &quot;Selbstsignierte
 Zertifikate erlauben&quot; einschalten oder das Zertifikat des Workers
@@ -2035,23 +2430,30 @@ das zu umgehen, gibt es genau zwei klar benannte Wege:</p>
 <tr>
 <td><strong>Zertifikat anheften</strong></td>
 <td>An der Worker-Karte <strong>Zertifikat</strong> drücken und <code>worker-cert.pem</code> wählen</td>
-<td><strong>Echte</strong> Prüfung: Signatur, Gültigkeit und Passung. Die Anzeige wird zu <em>TLS, Zertifikat angeheftet und geprüft</em>.</td>
+<td><strong>Echte</strong> Prüfung: Signatur, Gültigkeit und Passung. Die Anzeige wird zu <em>TLS, Zertifikat angeheftet und geprueft</em>.</td>
 </tr>
 </tbody></table>
-<p>Den Pfad zur Datei zeigt die Worker-App beim Knopf <strong>Fingerabdruck anzeigen</strong> –
-einmal auf den Hauptrechner kopieren genügt, der Manager merkt sich den Pfad.
-Der Fingerabdruck erscheint auf beiden Seiten; <strong>stimmen sie überein, ist es
-derselbe Rechner.</strong></p>
-<p>Die Karte im Cluster-Fenster sagt immer, was gilt:</p>
-<pre><code class="language-text">TLS, Zertifikat angeheftet und geprüft          (grün)  beste Variante
-TLS, verschlüsselt (Zertifikat nicht geprüft)   (gelb)  Freigabe aktiv
-Ohne Verschlüsselung (ws://)                    (grau)  Klartext
+<p>Den Pfad zur Datei (<code>.../tls/worker-cert.pem</code>) zeigt die Worker-App beim Knopf
+<strong>Fingerabdruck anzeigen</strong> – einmal auf den Hauptrechner kopieren genügt, der
+Manager merkt sich den Pfad. Der Fingerabdruck ist der SHA-256 über das
+DER-Zertifikat. Achtung beim Vergleichen: die <strong>Worker-App zeigt ihn vollständig
+in Großbuchstaben mit Doppelpunkten</strong>, die <strong>Karte im Cluster-Fenster nur die
+ersten 16 Zeichen in Kleinbuchstaben</strong>. Stimmen diese 16 Zeichen überein, ist es
+derselbe Rechner.</p>
+<p>Die Karte im Cluster-Fenster sagt immer, was gilt (vier Zustände, nicht drei):</p>
+<pre><code class="language-text">TLS, Zertifikat angeheftet und geprueft           (grün)   geprüft (beste Variante)
+TLS, verschluesselt (Zertifikat nicht geprueft)   (gelb)   Freigabe aktiv
+TLS, Systemvertrauen (selbstsigniert scheitert)   (gelb)   wss:// ohne Freigabe –
+                                                          Handshake scheitert
+Ohne Verschluesselung (ws://)                     (grau)   Klartext
 </code></pre>
+<p>Die Schreibweise ohne Umlaute ist kein Tippfehler: die Oberfläche zeigt die
+Texte genau so an (<code>geprueft</code>, <code>verschluesselt</code>).</p>
 <h2>4. Was TLS hier leistet – und was nicht</h2>
 <p><strong>Leistet:</strong></p>
 <ul>
-<li>Mitlesen im Netz ist wirkungslos: Token, Python-Code, Dateien und Ergebnisse
-sind verschlüsselt.</li>
+<li>Auf der WebSocket-Verbindung ist Mitlesen wirkungslos: Python-Code, Dateien,
+Ergebnisse und das Token <strong>im Auth-Frame</strong> sind verschlüsselt.</li>
 <li>Mit angeheftetem Zertifikat ist zusätzlich die <strong>Identität</strong> des Rechners
 geprüft.</li>
 <li>Eine geänderte oder kaputte Vertrauensdatei führt zur <strong>Ablehnung</strong> der
@@ -2060,6 +2462,9 @@ Verbindung, nie zu einer schwächeren.</li>
 </ul>
 <p><strong>Leistet nicht:</strong></p>
 <ul>
+<li>Es schützt <strong>nicht</strong> den Discovery-Beacon. Ist Auto-Pair an, geht das Token als
+unverschlüsselter UDP-Broadcast durchs Netz, bevor irgendein TLS-Handshake
+beginnt (siehe Abschnitt 1).</li>
 <li>Ohne angeheftetes Zertifikat schützt TLS gegen <strong>Mitlesen</strong>, nicht gegen
 einen <strong>aktiven</strong> Angreifer im selben Netz (Man-in-the-Middle).</li>
 <li>Godot gibt bei <code>WebSocketPeer</code> das empfangene Zertifikat nicht heraus – eine
@@ -2070,7 +2475,8 @@ Worker-Benutzers.</li>
 </ul>
 
 <div class="adm adm-warning"><p class="adm-title">Fremde Netze</p><p>Über Messe-, Hotel- oder Gast-WLAN zusätzlich einen <strong>VPN-Tunnel</strong> verwenden
-(z. B. WireGuard) und „Auto-Pair“ abschalten.</p>
+(z. B. WireGuard) und Auto-Pair abschalten (das Token liegt sonst im Klartext
+im Netz).</p>
 </div>
 <h2>5. Eigenes Zertifikat (eigene PKI)</h2>
 <p>Wenn eine eigene Zertifizierungsstelle vorhanden ist, lässt sich der Worker
@@ -2085,14 +2491,17 @@ ist sie unlesbar, <strong>startet der Worker nicht</strong> – statt heimlich u
 weiterzulaufen.</p>
 <h2>6. Ohne TLS arbeiten (bewusst)</h2>
 <p>Für Umgebungen, in denen der Manager kein TLS kann: in der Worker-App das
-Häkchen <strong>„Verschlüsselt (TLS)“</strong> entfernen. Der Worker spricht dann wieder
-<code>ws://</code> – das Verhalten der früheren Versionen. Danach im Cluster-Fenster keine
-TLS-Freigabe mehr nötig.</p>
+Häkchen <strong>„Verschluesselt (TLS) - Zertifikat wird automatisch erzeugt“</strong>
+entfernen. Der Worker spricht dann wieder <code>ws://</code> – das Verhalten der früheren
+Versionen. Danach im Cluster-Fenster keine TLS-Freigabe mehr nötig.</p>
 <h2>7. Empfohlene Aufstellung</h2>
 <ol>
-<li>Worker mit <strong>eigenem, unprivilegiertem Benutzerkonto</strong> starten.</li>
-<li>TLS eingeschaltet lassen und <strong>einmal</strong> <code>worker-cert.pem</code> anheften – dann ist
-die Verbindung verschlüsselt <strong>und</strong> geprüft.</li>
+<li>Worker mit <strong>eigenem, unprivilegiertem Benutzerkonto</strong> starten und
+<code>worker_config.json</code> auf <code>chmod 600</code> setzen.</li>
+<li>TLS eingeschaltet lassen, Auto-Pair <strong>abschalten</strong> („Automatische Kopplung
+erlauben“) und das Token einmal an der Worker-Karte eintragen.</li>
+<li>Einmal <code>worker-cert.pem</code> anheften – dann ist die Verbindung verschlüsselt
+<strong>und</strong> geprüft.</li>
 <li>Token wie ein Passwort behandeln; bei Verdacht in der App <strong>„Neu erzeugen“</strong>
 und im Manager neu eintragen.</li>
 <li>Firewall: nur TCP 8765 und UDP 8766 im LAN erlauben.</li>
@@ -4654,8 +5063,10 @@ es ist bewusst <strong>kein Kommunikationsweg</strong> (siehe
 verschlüsselter Transport (<code>wss://</code>), Router mit Capacity Gate,
 Datei-Registry mit Chunk-Transfer und SHA-256-Prüfung, Wiederzuweisung nach
 Ausfall. Sie ist bewusst <strong>transportunabhängig</strong> – der Kern (Server-/Task-
-Manager, Router, Dispatcher) weiß nichts vom Netz; nur
-<code>OrchestratorTransport</code> spricht WebSocket.</li>
+Manager, Router, Dispatcher, Datei-Registry) weiß nichts vom Netz: nur
+<code>OrchestratorTransport</code> spricht WebSocket, <code>OrchestratorFileTransfer</code> benutzt
+ihn nur. Die Rechner-Erkennung liegt getrennt daneben
+(<code>cluster_discovery.gd</code>, UDP).</li>
 <li>Container-/Docker-Orchestrierung bleibt außen vor: das Modul ist für das
 eigene LAN gebaut, nicht für Cloud-Cluster.</li>
 </ul>
@@ -4664,8 +5075,8 @@ eigene LAN gebaut, nicht für Cloud-Cluster.</li>
 <section id="hochleistungspfade" class="chapter">
 <h1>Kommunikationspfade</h1>
 <p>Zwischen Godot und Python gibt es genau <strong>zwei Wege</strong>. Alles andere
-(GDScript2All, Cluster) ist entweder ein Werkzeug oder ein Ausblick –
-kein dritter Transportweg.</p>
+(GDScript2All, Cluster) ist entweder ein Werkzeug oder benutzt einen dieser
+Wege – kein dritter Transportweg.</p>
 <pre><code class="language-text">Pfad 1 (verifiziert)        Pfad 2 (Konzept, lokal)
 GDScript ──WebSocket──&gt; Python      GDScript ─[C++-Shim]─ Shared Memory ─&gt; Python
    Kontrolle + kleine Daten             große numerische Daten
@@ -4854,10 +5265,14 @@ vorhanden, experimentell). Am Transport ändert es nichts – WebSocket
 bleibt gleich schnell, und „übersetzen“ ist keine Datenübertragung.
 Beides getrennt zu denken verhindert die Verwechslung „ich übersetze,
 also ist mein Transport schnell“.</li>
-<li><strong>Cluster / Docker:</strong> konzeptionell vorbereitet
-(<code>docs/CLUSTER_INTEGRATION_PLAN.md</code>), bewusst noch nicht implementiert.
-Für Cluster gilt ohnehin: Shared Memory ist unbrauchbar (kein
-gemeinsamer RAM über Maschinen) – dort zählt Pfad 1 über das Netz.</li>
+<li><strong>Cluster:</strong> verteiltes Rechnen ist seit v0.4.0 <strong>umgesetzt</strong>
+(<a href="https://cybertoshi.github.io/python-bridge/docs/cluster">Cluster</a>), aber es ist <strong>kein dritter Transportweg</strong>: der
+Cluster benutzt Pfad 1 (WebSocket) über das Netz. Für ihn gilt außerdem:
+Shared Memory ist unbrauchbar (kein gemeinsamer RAM über Maschinen) –
+Pfad 2 bleibt eine Sache innerhalb <em>eines</em> Rechners.</li>
+<li><strong>Docker / Container-Orchestrierung:</strong> weiterhin nicht Teil des Werkzeugs.
+Der Cluster ist bewusst für dasselbe LAN gebaut, nicht für Cloud-Betrieb
+(<code>docs/CLUSTER_INTEGRATION_PLAN.md</code> bleibt als Planungstext erhalten).</li>
 </ul>
 <hr>
 <h2>5. Kernaussagen</h2>
@@ -5150,8 +5565,8 @@ erwartet: <code>ready</code>.</li>
 </tr>
 <tr>
 <td>Rechner gefunden, verbindet aber nicht</td>
-<td>TCP 8765 geblockt, falsches Token oder „Auto-Pair“ aus</td>
-<td>Token an der Worker-Karte nachtragen</td>
+<td>TCP 8765 geblockt, falsches Token oder Auto-Pair abgeschaltet</td>
+<td>Token über den Knopf <strong>Token</strong> an der Worker-Karte nachtragen</td>
 </tr>
 <tr>
 <td>„TLS-Handshake … fehlgeschlagen“</td>
@@ -5159,8 +5574,8 @@ erwartet: <code>ready</code>.</li>
 <td>Häkchen <em>Selbstsignierte Zertifikate erlauben</em> setzen oder <code>worker-cert.pem</code> anheften (<a href="https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit">Cluster-Sicherheit</a>)</td>
 </tr>
 <tr>
-<td>Karte zeigt „TLS, verschlüsselt (Zertifikat nicht geprüft)“</td>
-<td>Freigabe statt Anheften aktiv</td>
+<td>Karte zeigt „TLS, verschluesselt (Zertifikat nicht geprueft)“</td>
+<td>Freigabe statt Anheften aktiv (die Oberfläche schreibt ohne Umlaute)</td>
 <td>Für echte Prüfung das Zertifikat anheften</td>
 </tr>
 <tr>
@@ -5185,8 +5600,8 @@ erwartet: <code>ready</code>.</li>
 </tr>
 <tr>
 <td>„Datei ist zu gross“ / „Datei-Cache des Workers ist voll“</td>
-<td>Grenzen der Worker-App</td>
-<td><code>--max-file-mb</code> / <code>--max-cache-mb</code> erhöhen oder Cache leeren</td>
+<td>Grenze überschritten – die Meldung nennt Größe und Limit</td>
+<td>Cache-Wert in der Worker-App erhöhen oder Cache leeren. Achtung: eine <strong>einzelne</strong> Eingabedatei ist im Manager fest auf 512 MB begrenzt, ein höherer Worker-Wert hilft dagegen nicht (<a href="https://cybertoshi.github.io/python-bridge/docs/cluster-setup">Cluster aufsetzen</a>)</td>
 </tr>
 <tr>
 <td>„Prüfsumme stimmt nicht (SHA-256)“</td>
@@ -5206,7 +5621,7 @@ erwartet: <code>ready</code>.</li>
 <tr>
 <td>Worker verschwindet nach kurzer Zeit</td>
 <td>App geschlossen oder Standby</td>
-<td>Neu starten; der Manager verbindet selbst wieder und holt offene Aufgaben nach</td>
+<td>Neu starten; der Manager verbindet selbst wieder. Nicht quittierte Aufgaben werden neu bewertet und einem anderen Rechner zugewiesen – abgeschlossene werden <strong>nicht</strong> wiederholt</td>
 </tr>
 <tr>
 <td>Nur Gastnetz / AP-Isolation (kein Broadcast)</td>

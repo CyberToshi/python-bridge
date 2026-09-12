@@ -64,15 +64,23 @@ ClusterPanel (Control)                 ← fertige Oberfläche (cluster_main.tsc
     └── Scheduler     Router + Dispatcher + Transport
 ```
 
-Wer keine Oberfläche braucht, benutzt den Manager direkt:
+Wer keine Oberfläche braucht, benutzt den Manager direkt. Zwei Dinge sind am
+Beispiel wichtig zu verstehen:
+
+* Der **erste Parameter ist nur der Anzeigename** der Aufgabe – kein Dateipfad,
+  den es auf dem Worker geben müsste. Er steht später in der Tabelle und im
+  Protokoll.
+* Ausgeführt wird, was in `source` steht (oder die übertragene Projektdatei).
+  Der Worker legt dafür ein eigenes Arbeitsverzeichnis an.
 
 ```gdscript
 var cluster := ClusterManager.new()
-add_child(cluster)
+add_child(cluster)   # startet Discovery und lädt gemerkte Rechner
 cluster.task_finished.connect(func(task_id: String, ok: bool, value: Variant, error: String) -> void:
     print(task_id, " → ", ok, " ", value, " ", error))
 
-# Aufgabe mit übertragenem Python-Code (auf dem Worker liegt keine Datei)
+# "mein_lauf" ist der Name; der Code kommt aus "source" mit.
+# command "run": der Code liest `input` und setzt `result`.
 cluster.submit_script("mein_lauf", {
     "command": "run",
     "input": {"werte": [1, 2, 3]},
@@ -80,19 +88,31 @@ cluster.submit_script("mein_lauf", {
 })
 ```
 
+Für den Alltag gibt es passende Kurzwege – statt Code als Text zu übergeben:
+
+| Aufruf | Was passiert |
+|---|---|
+| `submit_project_dir("res://mein_projekt")` | liest den Ordner (nur Textdateien, ohne `venv`/`__pycache__`), bestimmt den Einstieg (`main.py`, `app.py`, …) und lässt bauen, falls nötig |
+| `submit_script_file("res://scripts/bench.py", {...})` | eine einzelne Datei als Aufgabe |
+| `submit_with_files({...}, ["res://daten/modell.dat"])` | Aufgabe **plus** Eingabedateien; übernimmt Registrierung und Transfer |
+| `cancel_task(task_id)` | bricht Aufgabe und laufenden Datei-Transfer ab |
+
+`call` statt `run`: dann wird eine Funktion im Code aufgerufen – dazu `function`
+und optional `args`/`kwargs` setzen. `input` gibt es nur bei `run`.
+
 ## Was das Modul übernimmt
 
 | Baustein | Aufgabe |
 |---|---|
-| **LAN-Discovery** | UDP-Broadcast: Rechner finden sich selbst. Keine IP, kein Port zum Eintippen. |
+| **LAN-Discovery** | UDP-Broadcast: Rechner finden sich selbst. Keine IP, kein Port zum Eintippen. Der Beacon ist **nicht** verschlüsselt – deshalb ist Auto-Pair eine bewusste Entscheidung ([Cluster-Sicherheit](./cluster-sicherheit)). |
 | **Worker-Transport** | WebSocket-Verbindung pro Rechner (`wss://`), Heartbeat, automatische Wiederverbindung. |
-| **Capacity Gate** | Ein Rechner nimmt nur so viele Aufgaben an, wie seine Grenzen (CPU/RAM/Queue) zulassen – mit Hysterese, damit der Zustand nicht flattert. |
+| **Capacity Gate** | Ein Rechner nimmt nur so viele Aufgaben an, wie seine Grenzen (CPU/RAM/Queue) zulassen. Zustände je Rechner: `READY` (nimmt an), `LIMITED` (knapp, nimmt noch an), `BLOCKED` (gesperrt), `UNRESPONSIVE` (Heartbeat fehlt), `DISCONNECTED`. Mit Hysterese: die Freigabe aus `BLOCKED` kommt erst **unter** der READY-Schwelle, damit der Zustand nicht flattert. |
 | **Router** | Wählt den passenden Rechner: verfügbar + Kapazität + Ressourcen + **Daten schon da** (Data Locality). |
 | **Task-Zustandsautomat** | `CREATED → QUEUED → ASSIGNED → WAITING_FOR_DATA → RUNNING → COMPLETED/FAILED/RETRYING/CANCELLED`. |
 | **ACK & Wiederzuweisung** | Ein Auftrag gilt erst nach Quittung als übertragen. Fällt ein Rechner aus, werden betroffene Aufgaben neu bewertet – abgeschlossene **nicht** wiederholt. |
 | **Datei-Registry + Chunk-Transfer** | Große Eingaben werden inhaltsadressiert (SHA-256), in 256-KB-Stücken übertragen und **vor** dem Start geprüft. Schon vorhandene Dateien werden nicht erneut geschickt. |
 | **Projekte mit Build** | Enthält der Ordner `.pyx` oder `requirements.txt`, legt der Worker eine isolierte Umgebung an, installiert und kompiliert – im Cache, damit der zweite Lauf sofort startet. |
-| **TLS** | Standardmäßig verschlüsselt; Zertifikat entsteht automatisch. Siehe [Cluster-Sicherheit](./cluster-sicherheit). |
+| **TLS** | In der Worker-App standardmäßig verschlüsselt (`ws://` nur, wenn der Worker von Hand ohne TLS gestartet wird); Zertifikat entsteht automatisch. Siehe [Cluster-Sicherheit](./cluster-sicherheit). |
 | **Monitoring** | CPU, RAM, GPU (optional), Latenz, Queue, aktive Aufgaben – pro Rechner in der Oberfläche. |
 
 ## Bewusst *nicht* enthalten
@@ -101,8 +121,9 @@ cluster.submit_script("mein_lauf", {
 * Kein Ersatz für die lokale Instanz: die normale
   [Python Bridge](./getting-started) arbeitet unverändert weiter.
 * Keine Sandbox: übertragener Code läuft mit den Rechten des Worker-Benutzers.
-* Kein Fairness-/Prioritätssystem über mehrere Hauptrechner – ein Manager
-  steuert, mehrere Rechner rechnen.
+* Keine ausgleichende Fairness über mehrere Manager: **ein** Manager steuert die
+  Rechner, die er kennt. Prioritäten (`LOW`/`NORMAL`/`HIGH`) gibt es je Aufgabe,
+  sie ordnen nur die Warteschlange **innerhalb** dieses Managers.
 
 ## Weiterlesen
 

@@ -1,7 +1,12 @@
 # Cluster V1 – Analyse & Umsetzungsplan
 
-Diese Datei ist eine **Arbeitskarte**, keine User-Doku. Sie wird erweitert, sobald
-Details von dir kommen.
+> **Status: abgeschlossen (umgesetzt in v0.4.0).** Diese Datei ist eine
+> **Arbeitskarte**, keine User-Doku – sie bleibt stehen, damit die Entscheidungen
+> nachvollziehbar sind. Der Phasenplan unten (1–5) ist durchgeführt.
+> Aktuell bitte lesen:
+> [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md) (Aufsetzen),
+> [SAFETY.md](SAFETY.md) (Sicherheit/Grenzen),
+> [CYTHON_AND_BUILD.md](CYTHON_AND_BUILD.md) (Builds und Cache).
 
 ## 1. Ziel für V1 (aus Auftrag)
 

@@ -10,6 +10,11 @@ Hauptrechner (Godot + Dock "Task Orchestrator")  =  CONTROLLER
 Andere Rechner (führen Python-Skripte aus)       =  WORKER / CLIENT
 ```
 
+> **Für den normalen Betrieb ist [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md) der
+> aktuelle Weg** (Worker-App mit automatischer Erkennung und TLS an). Dieses
+> Dokument bleibt als **manuelle Variante** erhalten und beschreibt den Start
+> auf der Kommandozeile.
+
 > **Sicherheit zuerst:** Der Worker führt Python-Code aus. Seit der
 > Sicherheitsaktualisierung verweigert der Worker **ohne gültiges Token**
 > grundsätzlich jede Verbindung. Ein ungesicherter Worker ist auf einem LAN
@@ -255,11 +260,13 @@ New-NetFirewallRule -DisplayName "Orchestrator Worker" -Direction Inbound `
 
 ---
 
-## 8. Bewusste Grenzen
-
-- **Kein TLS:** das Token wird im WebSocket-Handshake übertragen. Innerhalb
-  eines privaten LANs/VPNs ok; über das Internet bitte nur über einen
-  VPN-Tunnel (WireGuard/Tailscale o. ä.).
-- **Keine automatische Dateiübertragung** (Phase 6–8): Skripte und Eingabedateien
-  müssen auf dem Worker bereits liegen.
+## 8. Bewusste Grenzen- **Dieser Start läuft ohne TLS:** die Befehle hier übergeben kein
+  `--tls-self-signed`, der Worker spricht also `ws://` – Token, Code und
+  Ergebnisse gehen im Klartext durchs Netz. Entweder `--tls-self-signed`
+  ergänzen oder den Worker über die App starten (dort ist TLS voreingestellt);
+  siehe [CLUSTER_V1_SETUP.md](CLUSTER_V1_SETUP.md) und [SAFETY.md](SAFETY.md).
+- **Dateiübertragung ist umgesetzt:** Skripte und Eingabedateien kann der
+  Manager selbst übertragen (Chunk-Transfer + SHA-256). Die Skripte müssen also
+  **nicht** mehr vorab auf dem Worker liegen – der `--scripts-dir`-Weg bleibt
+  als Alternative, wenn du die Dateien bewusst dort haben willst.
 - **Keine Rollenrechte:** wer das Token hat, darf Aufgaben einreichen.

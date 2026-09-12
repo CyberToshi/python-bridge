@@ -53,7 +53,15 @@ Der Rechner ist erst "sichtbar", wenn im Fenster der gruene Punkt und
     * Wer es genauer will: im Manager an der Worker-Karte den Knopf
       "Zertifikat" druecken und diese Datei waehlen:
          <Benutzer-Cache>/python_bridge_worker/tls/worker-cert.pem
-      Der Knopf "Fingerabdruck anzeigen" zeigt denselben Wert an.
+      Der Knopf "Fingerabdruck anzeigen" zeigt den SHA-256-Wert vollstaendig an
+      (Grossbuchstaben mit Doppelpunkten). Der Manager zeigt von demselben Wert
+      die ersten 16 Zeichen in Kleinbuchstaben - passen sie, ist es derselbe
+      Rechner.
+    * "Automatische Kopplung erlauben" ist eingeschaltet: damit steht das Token
+      im Suchsignal (Broadcast) des Rechners, und der Hauptrechner verbindet
+      ohne Eingabe. Dieses Suchsignal ist NICHT verschluesselt. In einem
+      fremden Netz (Hotel, Messe, Gaeste-WLAN) das Haekchen entfernen und das
+      Token im Manager einmal eintragen.
     * Ohne Verschluesselung (nur im eigenen LAN noetig): das Haekchen
       "Verschluesselt (TLS)" entfernen - dann laeuft es wieder als ws://.
   * Dieser Rechner fuehrt bewusst Python-Code aus, den der Hauptrechner

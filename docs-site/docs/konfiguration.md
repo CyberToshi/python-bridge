@@ -165,6 +165,94 @@ PythonBridge.configure({
 })
 ```
 
+## Cluster-Einstellungen
+
+:::warning Eigene Konfiguration – nicht `PythonBridge.configure`
+Alles oben gilt für die **lokale** Bridge (`PythonBridge.configure`). Das
+Cluster-Modul hat eine **eigene** Konfiguration; die Schlüssel unten setzt man
+mit `ClusterManager.configure(...)` (vor *oder* nach `add_child`).
+Schlüssel wie `max_retries` gibt es in **beiden** – sie bedeuten dort aber
+nicht dasselbe.
+:::
+
+```gdscript
+cluster.configure({
+    "cpu_block_pct": 90.0,          # früher sperren
+    "queue_capacity": 12,           # mehr gleichzeitige Aufgaben annehmen
+    "tls_allow_self_signed": true,  # selbstsignierte Zertifikate erlauben
+    "max_retries": 3,               # Wiederholungen je Aufgabe
+})
+```
+
+Unbekannte Schlüssel werden ignoriert (vorwärtskompatibel), Werte werden
+begrenzt: `unresponsive_ms` liegt immer über `heartbeat_interval_ms`, und die
+READY-Schwelle kann die BLOCK-Schwelle nicht überschreiten – sonst gäbe es
+keine Hysterese.
+
+Nicht über `configure()` laufen die **Node-Einstellungen** des
+`ClusterManager` – die stehen im Inspektor (oder als `@export`):
+
+| Feld | Standard | Bedeutung |
+|---|---|---|
+| `auto_discover` | `true` | Rechner automatisch per Broadcast suchen. |
+| `discovery_port` | `8766` | UDP-Port der Suche. |
+| `auto_connect` | `true` | Gefundene Rechner sofort verbinden. |
+| `worker_token` | `""` | Token für Rechner, die keins im Beacon mitsenden. |
+| `tls_allow_self_signed` | `false` | Selbstsignierte Zertifikate erlauben (siehe unten). |
+| `tls_ca_path` | `""` | Angeheftetes Zertifikat (PEM) für alle Rechner. |
+| `mirror_scene` | `false` | Legt einen Kind-Node `ClusterMirror` an, darunter je Rechner `Worker_<id>` und je Aufgabe `Task_<id>`. Der jeweilige Zustand steht als `get_meta("cluster")` bereit – so lässt sich der Cluster wie ein normales Node-System abfragen. |
+| `state_path` | `user://cluster_workers.json` | Wo gemerkte Rechner und Token liegen. |
+
+### Erreichbarkeit
+
+| Schlüssel | Standard | Bedeutung |
+|---|---|---|
+| `heartbeat_interval_ms` | `2000` | Abstand der Lebenszeichen des Workers. |
+| `unresponsive_ms` | `6000` | Ohne Lebenszeichen so lange → Rechner wird `UNRESPONSIVE`. |
+| `disconnected_ms` | `20000` | Danach gilt die Verbindung als getrennt. |
+
+### Kapazität (Capacity Gate)
+
+| Schlüssel | Standard | Bedeutung |
+|---|---|---|
+| `queue_capacity` | `8` | Wie viele Aufgaben ein Rechner gleichzeitig annehmen darf. |
+| `cpu_block_pct` | `85.0` | Ab dieser CPU-Last sperrt der Rechner (`BLOCKED`). |
+| `cpu_ready_pct` | `70.0` | Darunter ist er wieder `READY` (Hysterese). |
+| `ram_block_pct` | `90.0` | Wie `cpu_block_pct`, für den Arbeitsspeicher. |
+| `ram_ready_pct` | `75.0` | Wie `cpu_ready_pct`, für den Arbeitsspeicher. |
+
+Laufende Aufgaben werden nie abgebrochen, nur weil ein Rechner gesperrt wird.
+
+### Aufgaben, Versuche, Zuweisung
+
+| Schlüssel | Standard | Bedeutung |
+|---|---|---|
+| `task_timeout_ms` | `120000` | Obergrenze für eine Aufgabe im Manager. |
+| `max_retries` | `2` | Zusätzliche Versuche je Aufgabe. |
+| `retry_delay_ms` | `500` | Wartezeit vor einem erneuten Versuch. |
+| `ack_timeout_ms` | `10000` | So lange darf die Quittung des Workers dauern. |
+| `max_dispatch_per_tick` | `8` | Höchstens so viele Startversuche je Durchlauf. |
+| `max_payload_bytes` | `3145728` (3 MB) | Obergrenze eines Auftrags (Projekt/Code als Text). |
+
+### Routing (Router-Gewichte)
+
+| Schlüssel | Standard | Bedeutung |
+|---|---|---|
+| `router_locality_bonus` | `60.0` | Vorteil, wenn die Datei schon auf dem Rechner liegt. |
+| `router_latency_penalty_per_ms` | `0.5` | Abzug je Millisekunde Latenz. |
+| `router_load_weight` | `1.0` | Gewicht der Auslastung. |
+
+Höherer Wert = stärkerer Einfluss. Größerer `router_locality_bonus` schickt
+Aufgaben lieber dorthin, wo die Daten schon liegen (siehe [Cluster](./cluster)).
+
+### Sicherheit
+
+| Schlüssel | Standard | Bedeutung |
+|---|---|---|
+| `worker_token` | `""` | Shared Secret. Wird für die Discovery automatisch übernommen; im Beacon steht es nur mit Auto-Pair. Taucht **nicht** in `describe()` auf. |
+| `tls_ca_path` | `""` | Angeheftetes Zertifikat (PEM) → echte Prüfung. |
+| `tls_allow_self_signed` | `false` | Selbstsignierte Zertifikate bewusst erlauben. **Standard aus** – deshalb scheitert die erste `wss://`-Verbindung sichtbar, bis das Häkchen gesetzt oder ein Zertifikat angeheftet ist. |
+
 ## Details zu schwierigen Schlüsseln
 
 **`max_inflight_per_instance` + `workers_per_instance`:** Beide steuern

@@ -9,7 +9,12 @@ Zusätzlich kann dasselbe Addon Python-Aufgaben auf **andere PCs im eigenen LAN
 verteilen** (Cluster-Modul): automatische Erkennung, verschlüsselte Verbindung
 mit selbst erzeugtem Zertifikat, Datei-Transfer mit SHA-256-Prüfung und
 Weiterlaufen nach einem Rechner-Ausfall. Der Client-Rechner braucht dafür keine
-Terminal-Befehle und keine IP-Eingabe – nur die mitgelieferte Worker-App.
+Terminal-Befehle und keine IP-Eingabe – nur Python und die mitgelieferte
+Worker-App (`PythonBridge-Worker-*.zip`, startet per Doppelklick).
+
+> **Hinweis zur Verschlüsselung:** die Worker-App startet verschlüsselt (`wss://`);
+> Auto-Pair (Token im Discovery-Beacon) ist dort voreingestellt **an**. Details
+> und die ehrlichen Grenzen: [Cluster-Sicherheit](https://cybertoshi.github.io/python-bridge/docs/cluster-sicherheit).
 
 Aktuelle Version: siehe [`versions/VERSION`](versions/VERSION) · Pakete und
 Änderungen: [`versions/`](versions/)
@@ -68,15 +73,30 @@ Detaillierte Schritte: [Installation](https://cybertoshi.github.io/python-bridge
 - Godot 4.2+ (verifiziert mit 4.7.2)
 - Python 3.8+ (verifiziert mit 3.12/3.13)
 
+Nur für **Worker-Rechner** (Cluster) zusätzlich:
+
+- Python 3 **inkl.** Tkinter – unter Linux oft ein eigenes Paket
+  (`sudo apt install python3-tk` bzw. `sudo dnf install python3-tkinter`),
+  sonst startet die Oberfläche der Worker-App nicht.
+- Das Paket `websockets`; die App bietet dafür einen Knopf an, ein Terminal ist
+  nicht nötig.
+
 ## Neue Addon-Version veröffentlichen
 
-Ein Tag mit `v`-Präfix baut automatisch `python_bridge_addon.zip` und legt
-ein GitHub Release an:
+Ein Tag mit `v`-Präfix baut die Pakete automatisch über `versions/build_zips.sh`
+und legt ein GitHub Release mit beiden ZIPs und `SHA256SUMS.txt` an:
 
 ```bash
 git tag v0.4.0
 git push origin v0.4.0
 ```
 
-Das Release ist danach unter
+```text
+versions/PythonBridge-Plugin-<version>.zip    Addon für den Hauptrechner
+versions/PythonBridge-Worker-<version>.zip    Worker-App für die Clients
+versions/SHA256SUMS.txt                       Prüfsummen
+```
+
+Dasselbe Skript kannst du lokal ausführen – es schreibt die ZIPs nach
+`versions/`. Das Release ist danach unter
 `https://github.com/CyberToshi/python-bridge/releases` verfügbar.
