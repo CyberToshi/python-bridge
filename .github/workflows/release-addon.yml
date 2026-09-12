@@ -16,14 +16,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Package addon
+      - name: Package addon and worker
         run: |
-          # addons/python_bridge/ must stay at the top of the ZIP so extracting
-          # it into a project lands the plugin in addons/python_bridge/.
-          zip -r python_bridge_addon.zip addons/python_bridge/ -x '*/__pycache__/*' '*.pyc' '*.pyo'
+          # Use the same script developers run locally so the released ZIPs are
+          # byte-identical to the verified ones. The addon
+          # (addons/python_bridge/) stays at the top of the ZIP so extracting it
+          # into a project lands the plugin in addons/python_bridge/.
+          chmod +x versions/build_zips.sh
+          ./versions/build_zips.sh
+
+      - name: Show packages
+        run: |
+          ls -l versions/*.zip
+          cat versions/SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: python_bridge_addon.zip
+          files: |
+            versions/*.zip
+            versions/SHA256SUMS.txt
+            versions/RELEASE_NOTES_*.md
           generate_release_notes: true
