@@ -1227,6 +1227,35 @@ def _cleanup_dir(work_dir: Path) -> None:
         pass
 
 
+def cleanup_stale_work_dirs(work_root: Path, max_age_hours: float = 24.0) -> int:
+    """Task-Arbeitsverzeichnisse alternder Laeufe beim Start entfernen.
+
+    Normalerweise raeumt sich ein Task selbst hinterher auf (``finally``).
+    Wird der Worker aber hart beendet (Kill, Crash, Strom weg), bleiben die
+    Verzeichnisse liegen - auf Dauer fuellt das die Platte. Diese Bereinigung
+    laeuft bewusst nur beim Start: ein Verzeichnis eines *laufenden* Tasks
+    kann sie so nie treffen, und frisch angelegte bleiben unberuehrt.
+    """
+    import time
+    deadline = time.time() - max_age_hours * 3600.0
+    removed = 0
+    try:
+        entries = list(work_root.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.is_dir() or entry.name in ("scripts", "filedata"):
+            continue
+        try:
+            if entry.stat().st_mtime > deadline:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def _error_result(message: str, *, hint: str = "", action: str = "",
                   stage: str = "", detail: str = "") -> dict:
     """Einheitliche Fehlerantwort.
@@ -1494,6 +1523,15 @@ async def amain(args: argparse.Namespace) -> None:
         if pruned.get("removed"):
             print(f"[orchestrator-worker] Datei-Cache aufgeraeumt: "
                   f"{pruned['removed']} Datei(en)", flush=True)
+    except OSError:
+        pass
+    # Arbeitsverzeichnisse hart beendeter Laeufe entfernen (selbst aufgeraeumt
+    # wird im Normalfall im finally; das hier ist die Netz fuer Crashes).
+    try:
+        stale = cleanup_stale_work_dirs(worker.work_root)
+        if stale:
+            print(f"[orchestrator-worker] Alte Task-Verzeichnisse entfernt: {stale}",
+                  flush=True)
     except OSError:
         pass
     # Cache aufraeumen: Builds und Umgebungen duerfen nicht unbegrenzt wachsen.

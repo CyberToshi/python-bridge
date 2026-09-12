@@ -13,6 +13,9 @@ gesamte technische Infrastruktur dazwischen:
 
 - Start, Überwachung und kontrolliertes Beenden von Python-Prozessen
 - asynchrone WebSocket-Kommunikation (Godot blockiert nie auf Python)
+- Parameter gehen als Werte an Python, Return-Werte kommen strukturiert
+  zurück – bei großen Datenmengen als binäre Blöcke bzw. über Dateien
+  (DataRefs), nicht über einen gemeinsamen RAM-Bereich
 - strukturierte Ergebnisse und Fehler (Exception-Typ, Message, Traceback)
 - Task-Verwaltung: Queue, Prioritäten, Timeouts, Retry, Batching
 - Frame-Synchronisation: Antworten werden kontrolliert pro Frame abgearbeitet
