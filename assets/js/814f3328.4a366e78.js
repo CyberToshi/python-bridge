@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkpython_bridge_docs=self.webpackChunkpython_bridge_docs||[]).push([[472],{5513:e=>{e.exports=JSON.parse('{"title":"Recent posts","items":[{"title":"Willkommen bei Python Bridge","permalink":"/python-bridge/blog/willkommen","unlisted":false,"date":"2026-09-06T00:00:00.000Z"}]}')}}]);

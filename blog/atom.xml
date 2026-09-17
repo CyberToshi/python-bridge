@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://cybertoshi.github.io/python-bridge/blog</id>
+    <title>Python Bridge Blog</title>
+    <updated>2026-09-06T00:00:00.000Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://cybertoshi.github.io/python-bridge/blog"/>
+    <subtitle>Python Bridge Blog</subtitle>
+    <icon>https://cybertoshi.github.io/python-bridge/img/favicon.svg</icon>
+    <entry>
+        <title type="html"><![CDATA[Willkommen bei Python Bridge]]></title>
+        <id>https://cybertoshi.github.io/python-bridge/blog/willkommen</id>
+        <link href="https://cybertoshi.github.io/python-bridge/blog/willkommen"/>
+        <updated>2026-09-06T00:00:00.000Z</updated>
+        <summary type="html"><![CDATA[Python Bridge verbindet Godot 4 mit Python — ohne Python in eine eigene]]></summary>
+        <content type="html"><![CDATA[<p><strong>Python Bridge</strong> verbindet Godot 4 mit Python — ohne Python in eine eigene
+Sprache zu verwandeln. Du schreibst weiterhin normale <code>.py</code>-Dateien, und
+GDScript bleibt deine einfache Godot-Schnittstelle.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="was-die-bridge-heute-schon-kann">Was die Bridge heute schon kann<a href="https://cybertoshi.github.io/python-bridge/blog/willkommen#was-die-bridge-heute-schon-kann" class="hash-link" aria-label="Direkter Link zur Was die Bridge heute schon kann" title="Direkter Link zur Was die Bridge heute schon kann">​</a></h2>
+<ul>
+<li>Python-Prozesse starten, überwachen und sauber beenden</li>
+<li>asynchrone Tasks mit Prioritäten, Batching und Backpressure</li>
+<li>strukturierte Fehler inklusive Python-Traceback in Godot</li>
+<li>mehrere Python-Instanzen und Worker-Slots parallel</li>
+<li>automatische projektbezogene <code>venv</code> mit Dependency-Verwaltung</li>
+<li>Hot Reload von Python-Code aus dem Godot-Editor</li>
+<li>DataRefs und Datei-Transport für große numerische Ergebnisse</li>
+<li>Crash-Restart mit exponentiellem Backoff und Health Monitoring</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="der-aktuelle-stand">Der aktuelle Stand<a href="https://cybertoshi.github.io/python-bridge/blog/willkommen#der-aktuelle-stand" class="hash-link" aria-label="Direkter Link zur Der aktuelle Stand" title="Direkter Link zur Der aktuelle Stand">​</a></h2>
+<p>Die Python-Runtime ist durch eine umfassende Testsuite abgedeckt
+(90 Tests grün). Die Godot-Integration folgt der Verifikations-Checkliste
+in der <a href="https://cybertoshi.github.io/python-bridge/docs/godot-verification">Dokumentation</a>.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="was-als-nächstes-kommt">Was als Nächstes kommt<a href="https://cybertoshi.github.io/python-bridge/blog/willkommen#was-als-n%C3%A4chstes-kommt" class="hash-link" aria-label="Direkter Link zur Was als Nächstes kommt" title="Direkter Link zur Was als Nächstes kommt">​</a></h2>
+<ol>
+<li>End-to-End-Verifikation der Godot-Integration im Editor (P0)</li>
+<li>Verifikation des Shared-Memory-Datenpfads aus Godot heraus</li>
+<li>Automatisierte Builds für den GDExtension-Hochleistungspfad</li>
+</ol>
+<p>Der einfachste Einstieg ist das
+<a href="https://cybertoshi.github.io/python-bridge/docs/getting-started">Hello-World-Beispiel</a> — Godot startet Python dabei
+selbst, du brauchst kein Terminal.</p>]]></content>
+        <author>
+            <name>Python Bridge Team</name>
+            <uri>https://github.com/CyberToshi/python-bridge</uri>
+        </author>
+        <category label="release" term="release"/>
+        <category label="godot" term="godot"/>
+        <category label="python" term="python"/>
+    </entry>
+</feed>

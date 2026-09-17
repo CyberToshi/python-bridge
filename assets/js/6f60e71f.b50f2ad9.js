@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkpython_bridge_docs=self.webpackChunkpython_bridge_docs||[]).push([[748],{9268:e=>{e.exports=JSON.parse('{"authors":[{"name":"Python Bridge Team","role":"Maintainer","url":"https://github.com/CyberToshi/python-bridge","key":"python-bridge-team","page":null,"count":1}]}')}}]);

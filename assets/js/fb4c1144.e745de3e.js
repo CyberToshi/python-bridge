@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkpython_bridge_docs=self.webpackChunkpython_bridge_docs||[]).push([[158],{3201:e=>{e.exports=JSON.parse('{"metadata":{"permalink":"/python-bridge/blog","page":1,"postsPerPage":10,"totalPages":1,"totalCount":1,"blogDescription":"Neuigkeiten, technische Hintergr\xfcnde und Releases.","blogTitle":"Python Bridge Blog"}}')}}]);

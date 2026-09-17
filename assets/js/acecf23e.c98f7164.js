@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkpython_bridge_docs=self.webpackChunkpython_bridge_docs||[]).push([[903],{1912:o=>{o.exports=JSON.parse('{"blogBasePath":"/python-bridge/blog","blogTitle":"Python Bridge Blog","authorsListPath":"/python-bridge/blog/authors"}')}}]);

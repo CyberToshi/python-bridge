@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkpython_bridge_docs=self.webpackChunkpython_bridge_docs||[]).push([[548],{1055:e=>{e.exports=JSON.parse('{"tags":[{"label":"release","permalink":"/python-bridge/blog/tags/release","count":1},{"label":"godot","permalink":"/python-bridge/blog/tags/godot","count":1},{"label":"python","permalink":"/python-bridge/blog/tags/python","count":1}]}')}}]);
