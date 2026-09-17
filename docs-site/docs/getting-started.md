@@ -19,14 +19,21 @@ res://python_bridge/scripts/hello.py
 Die Python-Datei bleibt eine normale Python-Datei. Du musst sie nicht vorher im
 Terminal starten.
 
-## 0. Alternativ: Mitgeliefertes Beispiel starten
+## 0. Alternativ: Mitgelieferte Beispiele starten
 
-Das Projekt enthält ein lauffähiges Hello-World-Beispiel unter
-`res://example/hello/` (`hello_world.tscn` + `hello_bridge.gd` + `hello.py`).
-Öffne die Szene im Editor und drücke **F6** – das Skript kopiert `hello.py`
-selbst in den Bridge-Workspace, startet die Instanz und zeigt die Antwort
-in der Konsole. Der manuelle Weg unten erklärt Schritt für Schritt, was
-dabei intern passiert.
+Das Projekt enthält zwei lauffähige Beispiele:
+
+- **`res://example/hello/`** (`hello_world.tscn`) — minimales Hello-World.
+  Öffne die Szene im Editor und drücke **F6** – das Skript kopiert `hello.py`
+  selbst in den Bridge-Workspace, startet die Instanz und zeigt die Antwort
+  in der Konsole. Der manuelle Weg unten erklärt Schritt für Schritt, was
+  dabei intern passiert.
+- **`res://example/web_demo/`** — komplettes Web-Demo-Projekt: dieselbe Szene
+  und derselbe Python-Code laufen auf Desktop **und** im Browser (Pyodide),
+  inklusive Modul-Import (`modules/calculations.py`), Plugin-Import und
+  fertigem Web-Export-Preset. Workflow und Deployment: siehe
+  [Python im Browser](./web-runtime) bzw. `example/web_demo/README.md` im
+  Repository.
 
 ## 1. Python-Datei erstellen
 

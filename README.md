@@ -25,7 +25,8 @@ editor/                 Dock-Panel, Syntax-Highlighting, Wrapper-Generator
 python/                 Python-Server (asyncio + Worker-Thread), Executor, Introspection
 web/                    bridge_worker.js (Pyodide-Worker für Web-Exports)
 docs/                   Architektur, API, Installation, Export, Web-Runtime, Changelog
-example/                Minimalbeispiel (demo.gd + Beispielskript)
+example/hello/          Minimalbeispiel (Szene + Beispielskript)
+example/web_demo/       komplettes Web-Demo (Desktop + Browser, Bundle inklusive)
 tests/python/           Python-`unittest`-Suite (ausführbar, 136 Tests grün)
 tests/gdscript/         GDScript-Headless-Testrunner (godot --headless)
 tools/                  export_check.py, build_web_bundle.py, test_web_runtime.mjs
@@ -82,6 +83,11 @@ Lockfile) wird neben den Godot-Web-Export gelegt: lokal gebündelt zuerst,
 CDN als Fallback. NumPy/SciPy/Pandas werden **funktional** getestet
 (echte Berechnungen, nicht nur Import). Architektur und Grenzen:
 [docs/WEB_RUNTIME.md](docs/WEB_RUNTIME.md).
+
+Ein komplettes, lauffähiges Beispiel mit Web-Export-Preset liegt unter
+[example/web_demo/](example/web_demo/) — Desktop und Browser mit exakt
+derselben Szene und demselben Python-Code (Modul-Import, Plugin, Skripte).
+Der Workflow steht in [example/web_demo/README.md](example/web_demo/README.md).
 
 ## Tests
 

@@ -23,3 +23,10 @@ Thumbs.db
 # Lokale Roh-Downloads und Zip-Artefakte
 GdScript2All-*/
 *ThisZip*.zip
+
+# Demo-Projekt: Runtime-Workspace und Build-Artefakte (jedes Projekt legt sie selbst an)
+**/python_bridge/venv/
+**/python_bridge/bridge/
+**/python_bridge/tmp/
+**/python_bridge/config/
+build/

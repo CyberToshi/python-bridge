@@ -23,7 +23,6 @@ var _log: Array[String] = []
 var _py: String = ""
 var _venv_py: String = ""
 var _req_file: String = ""
-var _venv_probe_ms: int = -1500  # cooldown clock for the venv readiness probe
 var _pip_log: String = ""
 
 func start(cfg: Dictionary, target: Object, method: String) -> void:
@@ -64,25 +63,13 @@ func is_done() -> bool:
 ## The venv is only usable once its bundled pip exists: `venv/bin/python`
 ## appears early during `python -m venv`, while ensurepip bootstraps pip
 ## afterwards. Starting pip earlier fails with "No module named pip".
-## A bare folder check is NOT enough: pip's vendor tree is written over
-## several ticks, so a half-written pip can exist (crash:
-## "No module named pip._vendor.pyparsing.util"). We therefore probe with
-## a real import and a cooldown between probes (no threads, no busy-wait).
 func _venv_ready() -> bool:
 	if not FileAccess.file_exists(_venv_py):
 		return false
-	var now := Time.get_ticks_msec()
-	if now - _venv_probe_ms < 1500:
-		return false  # cooldown: give ensurepip time between probes
-	_venv_probe_ms = now
-	var out: Array = []
-	var code := "import pip, pip._internal.cli.main; print('ok')"
-	var ec := BridgeProcessManager.execute(PackedStringArray([
-		_venv_py, "-c", code]), out, true)
-	if ec == 0:
-		return true
-	_log.append("[PROV] venv-Probe noch nicht bereit (pip-Import), warte ...")
-	return false
+	var sp := _site_packages()
+	if sp == "":
+		return false
+	return DirAccess.dir_exists_absolute(sp + "/pip")
 
 func _prepare() -> void:
 	var ws: String = str(_cfg.get("workspace_fs",
