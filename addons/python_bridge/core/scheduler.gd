@@ -80,7 +80,7 @@ func on_instance_lost(instance_id: String, err: Dictionary) -> void:
 func _dispatch(now_ms: int) -> void:
 	var max_per_frame := int(_cfg.get("max_dispatch_per_frame", 16))
 	var dispatched := 0
-	var instances := _get_ready_instances.call()
+	var instances: Array = _get_ready_instances.call()
 	for instance in instances:
 		if dispatched >= max_per_frame:
 			return

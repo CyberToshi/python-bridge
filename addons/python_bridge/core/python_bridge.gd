@@ -97,6 +97,9 @@ func config() -> Dictionary:
 
 # ------------------------------------------------------------------ Instanzen
 func start_instance(instance_name := PythonBridgeConfig.DEFAULT_INSTANCE) -> PythonBridgeResult:
+	# Web: der Pyodide-Transport ist der einzige moegliche Python-Transport.
+	# Auf Desktop bleibt alles beim gewohnten Prozess-Weg.
+	var web_mode := OS.has_feature("web") or bool(_settings.get("web_transport", false))
 	var inst := _get_instance_by_name(instance_name)
 	# Beendete/fehlgeschlagene Instanz gleichen Namens entsorgen, bevor neu
 	# gestartet wird (sonst wuerde wait_ready sofort false liefern).
@@ -111,7 +114,10 @@ func start_instance(instance_name := PythonBridgeConfig.DEFAULT_INSTANCE) -> Pyt
 			return PythonBridgeResult.success({"instance": instance_name})
 		return PythonBridgeResult.failed(inst.status_text(), inst.last_error_message())
 
-	inst = BridgeInstance.new(self, instance_name, _instance_settings())
+	if web_mode:
+		inst = BridgeWebInstance.new(self, instance_name, _instance_settings())
+	else:
+		inst = BridgeInstance.new(self, instance_name, _instance_settings())
 	inst.name = "Instance_" + instance_name
 	inst.state_changed.connect(_on_instance_state)
 	inst.message_received.connect(_on_instance_message)
@@ -265,7 +271,11 @@ func _instance_settings() -> Dictionary:
 	s["workspace_fs"] = ProjectSettings.globalize_path(str(_settings.get("workspace_dir")))
 	var script_path: String = get_script().resource_path
 	if script_path != "":
-		s["bridge_python_dir"] = script_path.get_base_dir() + "/../python"
+		# Provisioner filesystem operations require an absolute path. The
+		# resource path is still useful for locating the add-on, but must be
+		# globalized before the Python runtime is copied into the workspace.
+		s["bridge_python_dir"] = ProjectSettings.globalize_path(
+			script_path.get_base_dir() + "/../python")
 	return s
 
 # ------------------------------------------------------------------ Task-API
@@ -315,7 +325,7 @@ func execute(code: String, input: Variant = {}, instance := PythonBridgeConfig.D
 # ------------------------------------------------------------------ Dauerhafte Skripte
 func create_script(script_id: String, code: String, subfolder := "") -> PythonBridgeResult:
 	var path := script_path_for(script_id, subfolder)
-	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -558,7 +568,7 @@ func _materialize_file(desc: Dictionary) -> PythonBridgeResult:
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_SERIALIZATION_ERROR,
 			str(res.get("error", "File materialization failed"))))
-	var value := PythonBridgeDataFile.decode_bytes(
+	var value: Variant = PythonBridgeDataFile.decode_bytes(
 		res.get("data", PackedByteArray()),
 		str(desc.get("dtype", "float64")),
 		desc.get("shape", []))

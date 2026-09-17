@@ -66,6 +66,25 @@ static func defaults() -> Dictionary:
 		# Bytes einer file-backed DataRef pro Frame beim Materialisieren lesen
 		# (Datei-Transport statt WebSocket; chunkweise, kein Main-Thread-Stall).
 		"file_read_bytes_per_frame": 16 * 1024 * 1024,
+		# --- Web transport (Pyodide) ---------------------------------------------
+		# Web-Exports nutzen automatisch den Pyodide-Transport; web_transport
+		# erzwingt ihn optional auch auf Desktop (Tests). Auf Web ist der
+		# Prozess-Transport technisch unmoeglich (kein OS.create_process).
+		"web_transport": false,
+		# Worker-Skript (addons/python_bridge/web/bridge_worker.js). Der
+		# Build (tools/build_web_bundle.py) kopiert es neben den Export;
+		# "bridge_worker.js" ist dann page-relativ erreichbar.
+		"web_worker_url": "bridge_worker.js",
+		# Lokal gebuendelte Pyodide-Runtime (bevorzugt, offline-faehig).
+		"web_pyodide_dir": "",
+		# CDN-Fallback, wenn kein lokales Bundle gesetzt ist.
+		"web_cdn_url": "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/",
+		# Workspace-Bundle (tar, vom Build erzeugt) fuer das virtuelle
+		# Dateisystem: python/, modules/, plugins/ usw.
+		"web_bundle_url": "bridge_workspace.tar",
+		# Pyodide-Pakete (Komma-Liste), z. B. "numpy,scipy,pandas".
+		"web_packages": "numpy",
+		"web_tag": "web",
 		# --- Connection / provisioning -------------------------------------------
 		"connect_timeout_ms": 20000,
 		"provision_venv_timeout_ms": 120000,
@@ -100,7 +119,7 @@ static func _coerce(key: String, value: Variant, fallback: Variant) -> Variant:
 			if value is Array or value is PackedStringArray:
 				return PackedStringArray(value)
 			return fallback
-		"workspace_dir", "python_executable", "wrapper_dir", "hot_reload_mode", "retry_policy":
+		"workspace_dir", "python_executable", "wrapper_dir", "hot_reload_mode", "retry_policy", "web_worker_url", "web_pyodide_dir", "web_cdn_url", "web_bundle_url", "web_packages", "web_tag":
 			return str(value) if value != null else fallback
 		"autostart":
 			return bool(value)

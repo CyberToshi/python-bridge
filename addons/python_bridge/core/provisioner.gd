@@ -40,11 +40,11 @@ func tick() -> void:
 	var now := Time.get_ticks_msec()
 	match _phase:
 		Phase.VENV:
-			if FileAccess.file_exists(_venv_py):
+			if _venv_ready():
 				_log.append("[PROV] venv fertig.")
 				_start_pip()
-			elif now - _start_ms > 120000:
-				_fail("[PROV] venv-Erstellung Timeout (120s). Befehl: %s -m venv %s" % [_py, _venv_py.get_base_dir().get_base_dir()])
+			elif now - _start_ms > 300000:
+				_fail("[PROV] venv-Erstellung Timeout (300s). Befehl: %s -m venv %s" % [_py, _venv_py.get_base_dir().get_base_dir()])
 		Phase.PIP:
 			if _pip_done():
 				_log.append("[PROV] Dependencies ok.")
@@ -60,6 +60,17 @@ func tick() -> void:
 func is_done() -> bool:
 	return _phase in [Phase.DONE_OK, Phase.DONE_ERR]
 
+## The venv is only usable once its bundled pip exists: `venv/bin/python`
+## appears early during `python -m venv`, while ensurepip bootstraps pip
+## afterwards. Starting pip earlier fails with "No module named pip".
+func _venv_ready() -> bool:
+	if not FileAccess.file_exists(_venv_py):
+		return false
+	var sp := _site_packages()
+	if sp == "":
+		return false
+	return DirAccess.dir_exists_absolute(sp + "/pip")
+
 func _prepare() -> void:
 	var ws: String = str(_cfg.get("workspace_fs",
 		ProjectSettings.globalize_path(str(_cfg.get("workspace_dir", "res://python_bridge")))))
@@ -71,6 +82,15 @@ func _prepare() -> void:
 	DirAccess.make_dir_recursive_absolute(scripts_dir)
 	DirAccess.make_dir_recursive_absolute(tmp_dir)
 	DirAccess.make_dir_recursive_absolute(cfg_dir)
+	# Der venv-Ordner enthaelt tausende Paketdateien (inkl. Non-Resource-
+	# Fixtures wie WAVs), die Godot sonst als Assets importieren will.
+	# .gdignore nimmt venv und tmp aus dem Import-Scan heraus; FileAccess
+	# ist davon nicht betroffen.
+	DirAccess.make_dir_recursive_absolute(venv)
+	for rel in ["venv/.gdignore", "tmp/.gdignore"]:
+		var f := FileAccess.open(ws + "/" + rel, FileAccess.WRITE)
+		if f:
+			f.close()
 
 	_py = _detect_python(str(_cfg.get("python_executable", "")))
 	if _py == "":
@@ -99,7 +119,7 @@ func _prepare() -> void:
 		_log.append("[PROV] Erstelle venv ...")
 		_phase = Phase.VENV
 		_start_ms = Time.get_ticks_msec()
-		OS.create_process(_py, PackedStringArray(["-m", "venv", venv]))
+		BridgeProcessManager.spawn(PackedStringArray([_py, "-m", "venv", venv]))
 
 func _start_pip() -> void:
 	_log.append("[PROV] pip install (websockets + Entwickler-Dependencies) ...")
@@ -111,7 +131,9 @@ func _start_pip() -> void:
 		"--log", _pip_log,
 		"-q", "-r", _req_file,
 	])
-	OS.create_process(_venv_py, args)
+	var argv := PackedStringArray([_venv_py])
+	argv.append_array(args)
+	BridgeProcessManager.spawn(argv)
 
 ## Verifies that the configured dependencies can be imported with the venv
 ## Python. Uses a short, blocking OS.execute call - this is acceptable here
@@ -127,8 +149,8 @@ func _verify_imports() -> bool:
 		if mod == "":
 			continue
 		var out: Array = []
-		var exit_code := OS.execute(_venv_py, PackedStringArray([
-			"-c", "import importlib; importlib.import_module(%s)" % JSON.stringify(mod)]),
+		var exit_code := BridgeProcessManager.execute(PackedStringArray([
+			_venv_py, "-c", "import importlib; importlib.import_module(%s)" % JSON.stringify(mod)]),
 			out, true)
 		if exit_code != 0:
 			ok = false
@@ -176,6 +198,15 @@ func _detect_python(override: String) -> String:
 	# 2) PYTHON_PATH-Umgebungsvariable als Alternative.
 	if OS.has_environment("PYTHON_PATH") and FileAccess.file_exists(OS.get_environment("PYTHON_PATH")):
 		return OS.get_environment("PYTHON_PATH")
+	# 2.5) Flatpak-Sandbox: der PATH im Container enthaelt nur den Runtime-
+	# Interpreter, dessen site-packages nicht mit einer vom Host erstellten
+	# venv kompatibel sind. Den Host-Python zuerst probieren.
+	if BridgeProcessManager.in_flatpak():
+		if FileAccess.file_exists("/run/host/usr/bin/python3"):
+			return "/run/host/usr/bin/python3"
+		var host_py := _which_unix("python3")
+		if host_py != "":
+			return host_py
 	# 3) Direkte PATH-Suche - braucht weder `sh` noch `where` und
 	#    funktioniert damit auch auf Windows ohne Shell-Werkzeuge.
 	var found := _search_path_for_python()
@@ -210,13 +241,13 @@ func _which_windows(cmd: String) -> String:
 
 func _which_unix(cmd: String) -> String:
 	var out: Array = []
-	if OS.execute("sh", PackedStringArray(["-lc", "command -v " + cmd]), out, false) == 0 and not out.is_empty():
+	if BridgeProcessManager.execute(PackedStringArray(["sh", "-lc", "command -v " + cmd]), out, false) == 0 and not out.is_empty():
 		return str(out[0]).strip_edges()
 	return ""
 
 func _check_version(py: String) -> bool:
 	var out: Array = []
-	if OS.execute(py, PackedStringArray(["--version"]), out, true) != 0:
+	if BridgeProcessManager.execute(PackedStringArray([py, "--version"]), out, true) != 0:
 		return false
 	var version := (str(out[0]) if not out.is_empty() else "").strip_edges()
 	if version == "":
@@ -250,20 +281,32 @@ func _copy_dir_recursive(src: String, dst: String) -> void:
 	var dir := DirAccess.open(src)
 	if dir == null:
 		return
+	# Build-Artifacts nie mitkopieren: __pycache__ enthaelt binaere .pyc-
+	# Dateien (kein gueltiges UTF-8) und gehoert in die Distribution nicht
+	# hinein - Python erzeugt den Cache im Ziel bei Bedarf selbst.
+	if src.get_file() == "__pycache__":
+		return
 	DirAccess.make_dir_recursive_absolute(dst)
 	dir.list_dir_begin()
 	var entry := dir.get_next()
 	while entry != "":
 		if dir.current_is_dir():
-			_copy_dir_recursive(src + "/" + entry, dst + "/" + entry)
+			if entry != "__pycache__":
+				_copy_dir_recursive(src + "/" + entry, dst + "/" + entry)
 		else:
+			if entry.ends_with(".pyc"):
+				entry = dir.get_next()
+				continue
 			var fin := FileAccess.open(src + "/" + entry, FileAccess.READ)
 			if fin:
-				var text := fin.get_as_text()
+				# Binaersicher: Rohbytes 1:1 uebernehmen (statt get_as_text/
+				# store_string, das an Nicht-UTF-8-Bytes scheitert und pro
+				# invalidem Byte einen Unicode-parsing-error spammt).
+				var raw := fin.get_buffer(fin.get_length())
 				fin.close()
 				var fout := FileAccess.open(dst + "/" + entry, FileAccess.WRITE)
 				if fout:
-					fout.store_string(text)
+					fout.store_buffer(raw)
 					fout.close()
 		entry = dir.get_next()
 

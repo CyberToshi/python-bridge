@@ -517,6 +517,7 @@ func _build_task_msg(task: PythonBridgeTask, instance_id: String) -> Dictionary:
 		"context": task.context_id,
 		"source_hash": task.source_hash,
 		"timeout_ms": task.timeout_ms,
+		"function": task.function,
 	}
 	msg["source"] = task.source if _needs_source(task, instance_id) else ""
 	task._source_sent = msg["source"] != ""
@@ -531,6 +532,7 @@ func _task_item(task: PythonBridgeTask, instance_id: String, seen: Dictionary = 
 		"context": task.context_id,
 		"source_hash": task.source_hash,
 		"timeout_ms": task.timeout_ms,
+		"function": task.function,
 	}
 	# In einem Batch darf je (context, hash) nur das erste Item den Source
 	# tragen; die Folge-Items referenzieren den Hash und laufen im selben

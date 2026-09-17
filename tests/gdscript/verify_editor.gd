@@ -44,6 +44,30 @@ func _initialize() -> void:
 		print("[VERIFY] FAIL: plugin not in editor_plugins: ", plugins)
 		ok = false
 
+	# 4) Hot-reload robustness: the Godot editor reloads dock scripts while
+	#    the panel is open; the surviving instance keeps its members, but
+	#    freshly declared UI members are null. The panel must rebuild itself
+	#    instead of crashing on nil widget access (regression for the
+	#    "invalid access to 'current_tab' on Nil" error).
+	var panel := _find_named(root, "Python Bridge")
+	if panel and panel.has_method("editor_poll"):
+		panel.set("_tab_bar", null)
+		panel.set("_file_list", null)
+		panel.set("_log", null)
+		panel.editor_poll()      # must rebuild instead of erroring
+		panel.refresh_scripts()
+		var rebuilt_tabs := _find_class(panel, "TabBar")
+		var rebuilt_edit := _find_class(panel, "CodeEdit")
+		if rebuilt_tabs and rebuilt_edit:
+			print("[VERIFY] OK: panel survived simulated script reload (UI rebuilt)")
+		else:
+			print("[VERIFY] FAIL: panel did not rebuild UI after simulated reload (tab_bar=",
+				rebuilt_tabs, ", edit=", rebuilt_edit, ")")
+			ok = false
+	else:
+		print("[VERIFY] FAIL: cannot simulate reload - dock panel missing")
+		ok = false
+
 	print("[VERIFY] RESULT: ", "PASS" if ok else "FAIL")
 	quit(0 if ok else 1)
 

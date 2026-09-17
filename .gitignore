@@ -18,3 +18,8 @@ python_bridge/config/
 # OS / editor
 .DS_Store
 Thumbs.db
+.aider*
+
+# Lokale Roh-Downloads und Zip-Artefakte
+GdScript2All-*/
+*ThisZip*.zip

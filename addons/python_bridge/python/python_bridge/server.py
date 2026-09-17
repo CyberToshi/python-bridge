@@ -20,7 +20,10 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-import websockets
+try:
+    import websockets
+except ImportError:  # Browser-Runtime (Pyodide): server.py wird dort durch
+    websockets = None  # browser_host.py ersetzt; der Import darf nicht brechen.
 
 from . import protocol, executor, introspection
 from .data_registry import DataStore, cleanup_orphan_files
@@ -460,6 +463,11 @@ async def run(host, port, tmpdir, tag, caps=None):
               flush=True)
 
     async def _serve():
+        if websockets is None:
+            raise RuntimeError(
+                "Das Paket 'websockets' fehlt. Der Desktop-Server benoetigt es"
+                " (pip install websockets). Im Browser laeuft stattdessen"
+                " python_bridge.browser_host.")
         server = await websockets.serve(
             partial(_handle_connection, state=state),
             host, port,

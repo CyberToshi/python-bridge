@@ -88,8 +88,14 @@ func _launch() -> void:
 		if _process.is_running():
 			_process.kill()
 		_process.forget()
-	var ws := str(_settings.get("workspace_fs", "res://python_bridge"))
-	var runner := ws + "/bridge/run_server.py"
+	var ws: String = str(_settings.get("workspace_fs", ""))
+	var runner: String = str(_settings.get("bridge_python_dir", "")) + "/run_server.py"
+	if ws == "" or runner == "/run_server.py":
+		_last_error = "Python workspace or bundled runner path is not configured."
+		_set_state(State.ERROR)
+		lost.emit(instance_name, PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_PROCESS_ERROR, _last_error, "", instance_name))
+		return
 	var cmd := PackedStringArray()
 	cmd.append(_venv_python(ws))
 	cmd.append(runner)
@@ -117,7 +123,13 @@ func _launch() -> void:
 	cmd.append(str(int(_settings.get("workers_per_instance", 1))))
 	cmd.append("--runaway-grace-ms")
 	cmd.append(str(int(_settings.get("runaway_grace_ms", 10000))))
+	# Stale-port protection: remove a leftover port file from a previous run
+	# so the STARTING probe cannot connect to a long-dead server.
+	var stale_port_file := ws + "/tmp/%s.json" % instance_name
+	if FileAccess.file_exists(stale_port_file):
+		DirAccess.remove_absolute(stale_port_file)
 	_process = BridgeProcessManager.new()
+	_process.kill_marker = "--tag " + instance_name
 	if not _process.start(cmd):
 		_last_error = "Process launch failed."
 		_set_state(State.ERROR)
@@ -382,7 +394,7 @@ func is_ready() -> bool:
 func last_error_message() -> String:
 	return _last_error
 
-func wait_ready(timeout_sec := 180.0) -> bool:
+func wait_ready(timeout_sec := 300.0) -> bool:
 	if state == State.READY:
 		return true
 	var waited := 0.0

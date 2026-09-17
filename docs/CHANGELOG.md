@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.3.0
+
+### Web-Transport (Pyodide)
+
+- **Pyodide im Web Worker**: Python läuft im Browser über WebAssembly —
+  `bridge_worker.js` baut Pyodide, entpackt das Workspace-Bundle in das
+  virtuelle Dateisystem (MEMFS) und dispatcht Protocol-v2-Frames an
+  `browser_host.py`.
+- **`BridgeWebInstance`/`BridgeWebConnection`**: erben die komplette
+  `BridgeInstance`-State-Machine (PROVISIONING→READY, Health, Crash-Restart,
+  Message-Routing, Shutdown); nur der Transport wird ausgetauscht. Auf
+  Web-Exports wird der Web-Transport automatisch gewählt (`web_transport`-
+  Config erzwingt ihn auch auf Desktop für Tests).
+- **`browser_host.py`**: Web-Gegenstück zu `server.py` — dieselbe Protocol-v2-/
+  Executor-/DataRef-/Introspection-Schicht ohne asyncio/WebSockets.
+- **Workspace-Bundle-Builder** (`tools/build_web_bundle.py`): baut Worker +
+  Workspace-Tar + Lockfile, optional lokale Pyodide-Runtime und gebündelte
+  pure-Python-Wheels (lokal-first, CDN-Fallback) für Static Hosting.
+- **Funktionaler Wissenschafts-Stack-Nachweis** (`tools/test_web_runtime.mjs`):
+  echte Pyodide-Runtime in Node — NumPy (linalg/FFT/Matmul), SciPy
+  (Integration/Optimierung), Pandas (GroupBy/Merge), vFS, Module/Plugins,
+  DataRefs mit 2-MB-Binary-Frames, Fehler und Cancellation: 20/20 PASS.
+- **Server.py toleriert fehlendes `websockets`** und `__init__.py` lädt `server`
+  lazy — der Web-Import zieht keine Desktop-Abhängigkeiten.
+
+### Export-Check & Tests
+
+- **Export-Check ausgebaut**: Windows/Linux mit Runtime-, Versions- und
+  Permissions-Prüfung; Web mit Bundle-Prüfung und `--fix`-Integration
+  (`build_web_bundle`).
+- **18 neue Web-Host-Tests** (`test_browser_host.py`) und **6 neue
+  Server-Integrationstests** (Crash per `os._exit`, Disconnect-Grace,
+  Multi-Task-Integrität, funktionaler NumPy/SciPy/Pandas-Desktop-Check):
+  Python-Suite 136/136 grün.
+
+### Cluster entfernt
+
+- Sämtliche Cluster-/Orchestrator-/Worker-Node-Komponenten sind aus dem
+  Repository entfernt; nur kleine Docstring-/Namens-Reste wurden bereinigt.
+  Desktop- und Web-Funktionalität sind davon unberührt.
+
 ## Unreleased
 
 ### Phase 4 — Datei-basierte grosse Daten (Commit `5aa94f9`)

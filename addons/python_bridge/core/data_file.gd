@@ -60,6 +60,7 @@ static func read_chunked(path: String, budget_bytes: int, expected_bytes: int, s
 static func decode_bytes(data: PackedByteArray, dtype: String, shape: Array) -> Variant:
 	return PythonBridgeSerializer.decode({
 		PythonBridgeSerializer.TAG: "ndarray",
+		"chunk": 0,
 		"dtype": dtype,
 		"shape": shape,
 		"nbytes": data.size(),

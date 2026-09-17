@@ -699,6 +699,135 @@ class ServerIntegrationTest(unittest.TestCase):
             proc.kill()
             proc.wait(timeout=5)
 
+    def _verify_science(self, verify_source, function, context):
+        """Dispatches one functional verification call through the real server."""
+        import asyncio
+
+        async def _main():
+            async with self._connect() as ws:
+                # NOTE: the desktop server does not push hello_ack
+                # unsolicited; it only replies to an explicit hello.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": "task", "id": "sci-1", "command": "call",
+                    "context": context, "source": verify_source,
+                    "function": function, "data": {}}))
+                msg, data = await self._recv(ws)
+                return msg, data
+
+        msg, data = asyncio.run(_main())
+        self.assertEqual(msg["type"], "task_result")
+        self.assertEqual(msg["status"], "ok")
+        self.assertTrue(data, "funktionaler Check lieferte False: %s" % msg)
+
+    def test_numpy_functional_desktop(self):
+        self._verify_science(
+            "\n".join([
+                "import numpy as np",
+                "def verify():",
+                "    x = np.linalg.solve(np.array([[3.0, 1.0], [1.0, 2.0]]), np.array([9.0, 8.0]))",
+                "    fft_ok = bool(np.allclose(np.abs(np.fft.fft([1, 0, 0, 0])), 1.0))",
+                "    a = np.arange(9, dtype=np.float64).reshape(3, 3)",
+                "    mat_ok = bool(np.allclose((a @ a)[0], [15.0, 18.0, 21.0]))",
+                "    return bool(np.allclose(x, [2.0, 3.0])) and fft_ok and mat_ok",
+            ]), "verify", "sci-np")
+
+    def test_scipy_functional_desktop(self):
+        self._verify_science(
+            "\n".join([
+                "from scipy import integrate, optimize",
+                "def verify():",
+                "    val, _ = integrate.quad(lambda x: x ** 2, 0, 3)",
+                "    res = optimize.minimize_scalar(lambda x: (x - 2) ** 2)",
+                "    return bool(abs(val - 9.0) < 1e-6 and abs(res.x - 2.0) < 1e-3)",
+            ]), "verify", "sci-sp")
+
+    def test_pandas_functional_desktop(self):
+        self._verify_science(
+            "\n".join([
+                "import pandas as pd",
+                "def verify():",
+                "    df = pd.DataFrame({'k': ['a', 'a', 'b'], 'v': [1, 2, 3]})",
+                "    sums = df.groupby('k')['v'].sum().to_dict()",
+                "    merged = pd.DataFrame({'k': ['a', 'b'], 'w': [10, 20]})",
+                "    j = df.merge(merged, on='k')",
+                "    return bool(sums == {'a': 3, 'b': 3} and len(j) == 3 and int(j['w'].sum()) == 40)",
+            ]), "verify", "sci-pd")
+
+    def test_crash_kills_process_os_exit(self):
+        """Szenario 5: Python-Prozess stürzt ab (os._exit(1) im Nutzer-Code).
+
+        Der Prozess ist danach wirklich tot (kein Zombie). Godot-seitig
+        übernimmt die Restart-Policy den Neustart (separat getestet); hier
+        wird der Prozess-Level-Vertrag gesichert."""
+        import asyncio
+
+        async def _main():
+            async with self._connect() as ws:
+                # NOTE: the desktop server does not push hello_ack
+                # unsolicited; it only replies to an explicit hello.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": "task", "id": "crash-1", "command": "run",
+                    "context": "crash", "source": "import os; os._exit(1)",
+                    "data": {}}))
+                try:
+                    await ws.recv()
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+
+        asyncio.run(_main())
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self.fail("process survived os._exit(1) - unexpected")
+        self.assertIsNotNone(self._proc.poll())
+
+    def test_disconnect_closes_grace_and_frees_port(self):
+        """Szenario 6: WebSocket wird unterbrochen.
+
+        Server hält eine 5s-Grace-Periode für Reconnects und beendet sich
+        danach selbst (kein Zombie)."""
+        import asyncio
+
+        async def _main():
+            ws = await self._connect().__aenter__()
+            # no hello needed: server reacts to socket close
+            await ws.close()
+
+        asyncio.run(_main())
+        try:
+            self._proc.wait(timeout=15)
+            self.assertIsNotNone(self._proc.poll())
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self.fail("server did not exit within grace period")
+
+    def test_multiple_tasks_roundtrip(self):
+        """Szenario 7: mehrere lokale Python-Aufgaben, Ergebnis-Integrität
+        über 10 Tasks hinweg (IDs, Reihenfolge, Kontext-Persistenz)."""
+        import asyncio
+
+        async def _main():
+            results = []
+            async with self._connect() as ws:
+                # NOTE: the desktop server does not push hello_ack
+                # unsolicited; it only replies to an explicit hello.
+                for i in range(10):
+                    await ws.send(protocol.build_text({
+                        "v": 2, "type": "task", "id": "multi-%d" % i,
+                        "command": "run", "context": "multi",
+                        "source": "result = input * input",
+                        "data": {"input": i}}))
+                    msg, data = await self._recv(ws)
+                    results.append((msg.get("id"), data))
+            return results
+
+        results = asyncio.run(_main())
+        self.assertEqual(len(results), 10)
+        for i, (rid, value) in enumerate(results):
+            self.assertEqual(rid, "multi-%d" % i)
+            self.assertEqual(value, i * i)
+
     def test_shutdown_ack(self):
         async def run():
             async with self._connect() as ws:
