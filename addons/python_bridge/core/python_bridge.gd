@@ -459,11 +459,20 @@ func compile_cython(scripts_dir := "", force := false) -> PythonBridgeResult:
 		_cython = BridgeCythonManager.new()
 		_cython.finished.connect(_on_cython_finished)
 	var report := _cython.start_build(dir, PackedStringArray(), force)
-	if report.get("pending", false):
-		# Der fertige Report trifft per _process/Tick ein; await auf das
-		# Signal liefert die Funktions-Argumente als Array.
-		var frame: Array = await _cython.finished
-		return _cython_result(frame[0] as Dictionary)
+	if report.get("pending", false) or _cython.is_busy():
+		# Der fertige Report trifft per _process/Tick ein. Auch wenn bereits
+		# EIN Build laeuft: hier warten statt "laeuft bereits"-Fehler -
+		# parallele Caller (z. B. call_script-Autobuild neben Start-Build)
+		# bekommen denselben Report. Achtung: await auf ein Signal MIT genau
+		# einem Argument liefert das Argument DIREKT (kein Array) - beide
+		# Formen akzeptieren (versionsunabhaengig).
+		var frame: Variant = await _cython.finished
+		var done: Dictionary = {}
+		if frame is Dictionary:
+			done = frame
+		elif frame is Array and not (frame as Array).is_empty():
+			done = (frame as Array)[0] as Dictionary
+		return _cython_result(done)
 	return _cython_result(report)
 
 ## Verwirft den Registry-Cache-Eintrag eines Pfads (nach Rename .py <-> .pyx,

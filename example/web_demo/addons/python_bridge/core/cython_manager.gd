@@ -35,7 +35,9 @@ func is_busy() -> bool:
 func start_build(scripts_dir: String, stems: PackedStringArray = PackedStringArray(), force := false) -> Dictionary:
 	if _busy:
 		return _err("Cython-Build laeuft bereits.")
-	var venv_py := _venv_python(scripts_dir.get_base_dir() + "/venv")
+	# Host-Prozesse verstehen kein res:// - immer globalisieren.
+	scripts_dir = ProjectSettings.globalize_path(scripts_dir)
+	var venv_py := _find_venv_python(scripts_dir)
 	if not FileAccess.file_exists(venv_py):
 		return _err("venv-Python nicht gefunden: %s - erst PythonBridge.start_instance() ausfuehren." % venv_py)
 	var tool := ProjectSettings.globalize_path(TOOL_PATH)
@@ -80,7 +82,8 @@ func tick() -> void:
 ## Blockierende Variante fuer Tests/CLI (NICHT aus dem Editor-UI nutzen -
 ## friert den Main-Thread fuer die Build-Dauer ein).
 func build_blocking(scripts_dir: String, stems: PackedStringArray = PackedStringArray(), force := false) -> Dictionary:
-	var venv_py := _venv_python(scripts_dir.get_base_dir() + "/venv")
+	scripts_dir = ProjectSettings.globalize_path(scripts_dir)
+	var venv_py := _find_venv_python(scripts_dir)
 	if not FileAccess.file_exists(venv_py):
 		return _err("venv-Python nicht gefunden: %s" % venv_py)
 	var tool := ProjectSettings.globalize_path(TOOL_PATH)
@@ -126,6 +129,17 @@ func _parse_json_lines(text: String) -> Dictionary:
 			if parsed is Dictionary:
 				return parsed
 	return {}
+
+## Sucht die venv-Python vom Skript-Ordner aus (uebliche Layouts):
+## <parent>/venv (Standard: python_bridge/scripts + python_bridge/venv),
+## <scripts>/venv (scripts_dir = Workspace-Root), <grandparent>/venv.
+func _find_venv_python(scripts_dir: String) -> String:
+	for base in [scripts_dir.get_base_dir() + "/venv", scripts_dir + "/venv",
+			scripts_dir.get_base_dir().get_base_dir() + "/venv"]:
+		var py := _venv_python(base)
+		if FileAccess.file_exists(py):
+			return py
+	return _venv_python(scripts_dir.get_base_dir() + "/venv")
 
 func _venv_python(venv: String) -> String:
 	if OS.get_name() == "Windows":
