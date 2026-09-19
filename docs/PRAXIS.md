@@ -254,7 +254,53 @@ verifiziert den Import.
 
 ---
 
-## 10. Typischer Ablauf auf einen Blick
+## 10. Cython-Module (Desktop, optional)
+
+Rechenlastige Funktionen dürfen als **Cython** geschrieben werden. Im
+Python-Editor-Dock den Toggle **„Als Cython-Modul kompilieren (.pyx)“**
+aktivieren — die Datei wird ab dann als `.pyx` gespeichert (bestehende
+`.py`-Dateien werden beim Umschalten umbenannt, der Inhalt bleibt):
+
+```python
+# python_bridge/scripts/mathtools.pyx
+import numpy as np            # Importe immer auf Modulebene
+
+__bridge_deps__ = ["numpy"]
+
+def smear(list xs, int passes):
+    cdef double s = 0.0
+    cdef int i
+    for i in range(passes):
+        s += xs[i % len(xs)]
+    return s * 0.5
+```
+
+Aufrufen wie ein normales Skript — der Build passiert **automatisch vor dem
+ersten Aufruf** (oder per Button „Compile Cython“):
+
+```gdscript
+var r := await PythonBridge.call_script("mathtools", "smear", [3.5, 100_000])
+```
+
+Was automatisch passiert:
+
+- **Nur veränderte Module** werden neu kompiliert (SHA-256-Vergleich;
+  unveränderte Module kosten beim Start nichts).
+- **Compiler**: System-Compiler, wenn vorhanden — sonst installiert sich das
+  Tool den Compiler selbst in die venv (pip-Paket `ziglang`). Auf Windows
+  greift MSVC, wenn die Build Tools installiert sind.
+- Der Build läuft als eigener Kurzprozess neben der Bridge-Instanz; ein
+  fehlgeschlagener Build kann die laufende Instanz nie destabilisieren.
+  Fehler erscheinen mit Datei + Zeile im Godot-Log.
+
+Grenzen ehrlich: Der **erste** Build dauert einige Sekunden — entwickeln
+sich Hot-Reload-Zyklen daher lieber in `.py`, und erst für die produktive
+Nutzung auf `.pyx` umschalten. Im **Web** (Pyodide) gibt es keinen
+C-Compiler; `.pyx` ist dort bewusst nicht verfügbar (der Export-Check warnt).
+
+Details und Fehlerbilder: Website-Kapitel „Cython-Module (Desktop)“.
+
+## 11. Typischer Ablauf auf einen Blick
 
 ```
 1. Addon kopieren:            addons/python_bridge/  →  res://addons/python_bridge/

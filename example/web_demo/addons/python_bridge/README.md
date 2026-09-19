@@ -22,6 +22,18 @@ func _ready() -> void:
     print(result.value)
 ```
 
+## Cython (Desktop, optional)
+
+Rechenlastige Funktionen dürfen als `.pyx` (Cython) geschrieben werden: Im
+Python-Editor-Dock den Toggle **„Als Cython-Modul kompilieren“** aktivieren
+und ganz normal `call_script` verwenden — kompilieren (inkrementell,
+nur veränderte Module), Import und Aufruf passieren automatisch. Als
+Compiler wird der System-Compiler genutzt; fehlt er, installiert sich die
+Bridge den Compiler selbst in die venv (pip-Paket `ziglang`) — es ist also
+**kein Compiler-Setup auf dem Zielrechner nötig**. Web/Pyodide: `.pyx` ist
+dort nicht verfügbar (kein C-Compiler im Browser); Details im Kapitel
+„Cython-Module (Desktop)“ der Doku-Website.
+
 ## Plattformstatus
 
 - **Windows/Linux:** lokaler Python-Prozess, venv, WebSocket und vollständige

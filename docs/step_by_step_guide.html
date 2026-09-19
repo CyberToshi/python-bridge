@@ -159,6 +159,37 @@ var r := await math.calculate(2, 3)</pre>
 </table>
 <p>Fehler sind immer strukturiert: <code>r.error</code> enthält <code>code</code> (Kategorie, z.&nbsp;B. <code>PYTHON_EXCEPTION</code>), <code>type</code> (Python-Exception-Typ), <code>message</code> und <code>traceback</code>.</p>
 
+<h1>4.5 Cython-Module (Desktop, optional)</h1>
+<h2>Schritt 4.5.1 – Toggle aktivieren</h2>
+<p>Im Python-Editor-Dock die Checkbox <b>„Als Cython-Modul kompilieren (.pyx)“</b>
+aktivieren. Die Datei wird ab sofort als <code>.pyx</code> gespeichert (eine
+bestehende <code>.py</code> wird umbenannt, der Inhalt bleibt).</p>
+<h2>Schritt 4.5.2 – Cython-Typen nutzen</h2>
+<pre>import numpy as np            # Importe immer auf Modulebene
+
+__bridge_deps__ = ["numpy"]
+
+def smear(list xs, int passes):
+    cdef double s = 0.0
+    cdef int i
+    for i in range(passes):
+        s += xs[i % len(xs)]
+    return s * 0.5</pre>
+<h2>Schritt 4.5.3 – Aufrufen wie ein normales Skript</h2>
+<pre>var r := await PythonBridge.call_script("mathtools", "smear", [3.5, 100_000])</pre>
+<p>Der Build passiert <b>automatisch vor dem ersten Aufruf</b> (oder per
+Button „Compile Cython“). Nur veränderte Module werden neu kompiliert.</p>
+<ul>
+  <li><b>Compiler:</b> System-Compiler, wenn vorhanden — sonst installiert
+  sich die Bridge den Compiler selbst in die venv (pip-Paket
+  <code>ziglang</code>). Kein Compiler-Setup auf dem Zielrechner nötig.</li>
+  <li><b>Web:</b> Cython ist im Browser nicht möglich (kein C-Compiler in
+  Pyodide) — der Export-Check warnt bei <code>.pyx</code>-Dateien.</li>
+  <li><b>Erster Build dauert einige Sekunden</b> — Hot-Reload-Zyklen lieber
+  in <code>.py</code> entwickeln, produktiv dann auf <code>.pyx</code>
+  umschalten.</li>
+</ul>
+
 <h1>5. Export-Test Linux</h1>
 <h2>Schritt 5.1 – Preset anlegen</h2>
 <p><b>Projekt → Export → Hinzufügen → Linux</b>.</p>

@@ -94,6 +94,18 @@ var r3 := await PythonBridge.define_script("mein_skript")
 
 # Alle Aufrufe akzeptieren optional einen Instanznamen:
 var r4 := await PythonBridge.call_script("mein_skript", "f", [1], {}, "worker")
+
+# --- Cython (Desktop-only) --------------------------------------------
+# .pyx-Datei anlegen (im Editor-Dock per Toggle oder programmatisch):
+PythonBridge.create_cython_script("mathtools", "def f(int n):\n    return n * 2\n")
+
+# Inkrementellen Build anstossen (passiert sonst automatisch vor dem
+# ersten call_script auf ein .pyx-Skript):
+var cb := await PythonBridge.compile_cython()           # force=false
+# Report: {ok, built[], skipped[], errors[], compiler, duration_s}
+
+# Aufruf identisch zu .py - das kompilierte Modul wird importiert:
+var r5 := await PythonBridge.call_script("mathtools", "f", [21])
 ```
 
 ### Task-API (fein-granular)

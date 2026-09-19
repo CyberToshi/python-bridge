@@ -21,9 +21,9 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/python_bridge"
 # 1) Addon-Inhalt
 cp -r "$REPO_DIR/addons/python_bridge/." "$STAGE/python_bridge/"
 
-# 2) Docs parallel zum Addon mitliefern
+# 2) Docs parallel zum Addon mitliefern (Markdown + HTML-Guide)
 mkdir -p "$STAGE/python_bridge/docs"
-cp "$REPO_DIR"/docs/*.md "$STAGE/python_bridge/docs/" 2>/dev/null || true
+cp "$REPO_DIR"/docs/*.md "$REPO_DIR"/docs/*.html "$STAGE/python_bridge/docs/" 2>/dev/null || true
 
 # 3) Aufräumen: keine Tests, keine Caches, keine Dev-Reste im Release
 rm -rf "$STAGE/python_bridge/tests" "$STAGE/python_bridge/__pycache__" \
