@@ -25,6 +25,20 @@ Für CI ist JSON verfügbar:
 python3 tools/export_check.py --project . --platform all --json
 ```
 
+## Export in einem Befehl
+
+Die Export-Scripts im Addon verketten Prüfung, (Web-)Bundle und headlessen
+Godot-Export — sie finden Godot selbst (natives Binary oder Flatpak):
+
+```bash
+./addons/python_bridge/tools/export_web.sh --serve      # Web + Testserver
+./addons/python_bridge/tools/export_linux.sh            # Linux-Desktop
+./addons/python_bridge/tools/export_windows.sh          # Windows (.exe)
+```
+
+Details, Optionen (`--debug`, `PRESET_NAME`/`BIN_NAME`) und Plattform-
+Hinweise: Doku-Website, Kapitel "Export-Prüfung".
+
 `--fix` erstellt fehlende, sichere Quell-Workspace-Ordner
 (`python_bridge/scripts`, `tmp`, `config` und `venv/.gdignore`) und baut bei
 `--platform web` auf Wunsch das Web-Bundle. Es installiert keine Pakete,

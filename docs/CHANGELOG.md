@@ -2,6 +2,15 @@
 
 ## v0.3.2 (current)
 
+### Export-Scripts + ZIP-Build
+
+- **Export in einem Befehl**: `export_web.sh` (`--serve`/`--debug`),
+  `export_linux.sh` und `export_windows.sh` im Addon unter
+  `tools/` - verketten Vorraussetzungs-Check, Export-Check, (Web-)Bundle und
+  headlessen Godot-Export; finden Godot nativ oder per Flatpak selbst.
+  Windows-Script warnt fehlendes Wine ab (nur fuer Icon-Patching noetig).
+- **Reproduzierbarer ZIP-Build**: `tools/build_plugin_zip.sh` packt das
+  Release-ZIP (Addon + Docs, ohne Tests/Caches) mit ausfuehrbaren Scripts.
 ### Ergebnis-Budget & geordnetes Shutdown (Hardening-Runde)
 
 - **Result-Budget vor dem Encoding (2.7)**: Ergebnisse, die
