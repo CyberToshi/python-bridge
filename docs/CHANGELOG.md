@@ -2,6 +2,26 @@
 
 ## v0.3.2 (current)
 
+### Cython-Sonderpfad (Desktop)
+
+- **.pyx-Skripte als First-Class-Buerger**: Toggle im Editor-Dock ("Als
+  Cython-Modul kompilieren"), Speichern als `.pyx`, automatischer
+  inkrementeller Build vor dem ersten `call_script` (Hash-basiert,
+  unveranderte Module werden uebersprungen). Kompilierte Module werden
+  importiert und verhalten sich im Kontext wie .py-Skripte.
+- **Compiler unabhaengig vom System**: System-CC bevorzugt; ohne gcc/MSVC
+  automatischer Fallback auf das pip-Paket `ziglang` (kompletter C-Compiler
+  als Wheel). Fehlende Build-Komponenten installiert das Tool selbst in die
+  venv (Self-Provisioning). Beweis: Build+Import funktionieren in einer venv
+  ohne jeglichen System-Compiler.
+- **Stabilitaet**: Build laeuft als eigener Kurzprozess ueber die venv
+  (asynchron, Report-Datei atomar) - Server/Executor/Protokoll unangetastet,
+  ein fehlgeschlagener Build kann die Instanz nicht destabilisieren. Web:
+  bewusst nicht unterstuetzt (kein C-Compiler in Pyodide); Export-Check
+  warnt bei .pyx im Projekt.
+- Neue Tests (`test_cython.py`, 7) - Suite jetzt 180 Tests; Doku-Seite
+  "Cython-Module (Desktop)" auf der Website.
+
 ### Export-Scripts + ZIP-Build
 
 - **Export in einem Befehl**: `export_web.sh` (`--serve`/`--debug`),

@@ -40,6 +40,11 @@ if _tmpdir_parent:
         _p = _tmpdir_parent / _sub
         if _p.is_dir() and str(_p) not in sys.path:
             sys.path.insert(0, str(_p))
+    # Skript-Ordner am ENDE anhängen: macht kompilierte Cython-Module
+    # (.so/.pyd aus .pyx) importierbar, ohne Standardpfade zu beschatten.
+    _scripts_dir = _tmpdir_parent / "scripts"
+    if _scripts_dir.is_dir() and str(_scripts_dir) not in sys.path:
+        sys.path.append(str(_scripts_dir))
 
 from python_bridge import server  # noqa: E402
 

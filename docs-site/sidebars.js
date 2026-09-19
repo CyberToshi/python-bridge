@@ -14,6 +14,7 @@ const sidebars = {
         'editor-ui',
         'export-check',
         'web-runtime',
+        'cython',
       ],
     },
     'konfiguration',

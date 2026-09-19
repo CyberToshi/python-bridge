@@ -34,6 +34,9 @@ var _dep_restart_done: Dictionary = {}   # context|hash -> true (Einmal-Schutz)
 var _pending_data: Dictionary = {}
 var _refs_by_instance: Dictionary = {}     # instance -> Array[PythonBridgeDataRef]
 var _data_seq: int = 0
+# Cython-Sonderpfad (Desktop-only): Manager + laufende Builds.
+var _cython: BridgeCythonManager = null
+var _cython_awaiters: Array = []  # [{"scripts_dir": String, "awaiter": Callable}]
 
 func _init() -> void:
 	# Runtime initialization: the global class cache is fully built by the
@@ -53,6 +56,7 @@ func _exit_tree() -> void:
 
 func _process(_delta: float) -> void:
 	poll()
+	_cython_tick()
 
 func _init_task_layer() -> void:
 	_script_registry = PythonBridgeScriptRegistry.new()
@@ -422,6 +426,61 @@ func create_script(script_id: String, code: String, subfolder := "") -> PythonBr
 	_script_registry.forget(path)
 	return PythonBridgeResult.success({"path": path})
 
+## Speichert Code als .pyx (Cython) im Skript-Ordner. Wie create_script,
+## aber mit .pyx-Endung - der Build wird separat per compile_cython()
+## angestossen (Hash-basiert inkrementell, veraenderte Dateien erkennen
+## die Build-Tools selbst).
+func create_cython_script(script_id: String, code: String) -> PythonBridgeResult:
+	var dir := workspace_dir() + "/scripts"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var path := dir + "/" + script_id + ".pyx"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
+			"Cannot open file for writing: " + path))
+	file.store_string(code)
+	file.close()
+	return PythonBridgeResult.success({"path": path, "cython": true})
+
+## Startet den inkrementellen Cython-Build (Desktop-only). Rueckgabe via
+## await; Report-Format siehe cython_build.py (ok/built/skipped/errors/
+## compiler/duration_s). Im Web-Pfad liefert die Methode einen klaren
+## Fehler statt still zu scheitern.
+func compile_cython(scripts_dir := "", force := false) -> PythonBridgeResult:
+	if OS.has_feature("web"):
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
+		"Cython-Build wird im Web-Export nicht unterstuetzt (Pyodide hat keinen C-Compiler)."))
+	var dir := scripts_dir
+	if dir == "":
+		dir = workspace_dir() + "/scripts"
+	if _cython == null:
+		_cython = BridgeCythonManager.new()
+		_cython.finished.connect(_on_cython_finished)
+	var report := _cython.start_build(dir, PackedStringArray(), force)
+	if report.get("pending", false):
+		# Der fertige Report trifft per _process/Tick ein; await auf das
+		# Signal liefert die Funktions-Argumente als Array.
+		var frame: Array = await _cython.finished
+		return _cython_result(frame[0] as Dictionary)
+	return _cython_result(report)
+
+## Verwirft den Registry-Cache-Eintrag eines Pfads (nach Rename .py <-> .pyx,
+## damit der naechste Lesezugriff frisch liest).
+func forget_script_cache(path: String) -> void:
+	_script_registry.forget(path)
+
+## Rohes Cython ist nicht exec-bar: run/define-Stil ist fuer .pyx bewusst
+## gesperrt (mit klarer Meldung statt kryptischem SyntaxError). Cython-
+## Module sind Call-Ziele - die Funktionen werden importiert.
+func _cython_run_style_guard(script_id: String) -> String:
+	if resolve_script_path(script_id).ends_with(".pyx") and not OS.has_feature("web"):
+		return "execute_script/define_script unterstuetzen keine .pyx-Module " \
+			+ "(rohes Cython ist nicht ausfuehrbar). Funktionen per " \
+			+ "call_script aufrufen - das kompilierte Modul wird importiert."
+	return ""
+
 func get_script_source(script_id: String) -> String:
 	var entry := _script_entry(script_id)
 	return str(entry.get("source", ""))
@@ -436,6 +495,10 @@ func _script_entry(script_id: String) -> Dictionary:
 	return _script_registry.entry_for(path)
 
 func execute_script(script_id: String, input: Variant = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
+	var pyx_err := _cython_run_style_guard(script_id)
+	if pyx_err != "":
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, pyx_err))
 	var entry := _script_entry(script_id)
 	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -485,12 +548,42 @@ func _needs_dependency_restart(result: PythonBridgeResult) -> bool:
 	return str(result.error.get("code", "")) == "DEPENDENCY_ERROR"
 
 func _call_script_inner(script_id: String, function: String, args: Array, kwargs: Dictionary, instance: String, timeout_sec: float, entry: Dictionary) -> PythonBridgeResult:
+	# Cython-Sonderpfad (Desktop): Vor dem ersten Call nach .pyd/.so-Seiten
+	# schauen; fehlt die Seite, einmal den Build anstossen. Der Build-Manager
+	# laeuft ueber die venv - der Server bleibt unangetastet.
+	var entry_path := resolve_script_path(script_id)
+	if entry_path.ends_with(".pyx") and not OS.has_feature("web"):
+		var stem := entry_path.get_file().get_basename()
+		if not _cython_output_present(stem):
+			var build_res: PythonBridgeResult = await compile_cython("", false)
+			if build_res.is_error():
+				return build_res
+		return await _submit_and_await(PythonBridgeTask.make_call(_next_task_id(),
+			"cython:" + entry_path, "", function, args, kwargs,
+			int(timeout_sec * 1000.0)), instance)
 	var task := PythonBridgeTask.make_call(_next_task_id(), _script_context(script_id), entry.source,
 		function, args, kwargs, int(timeout_sec * 1000.0))
 	task.source_hash = entry.hash
 	return await _submit_and_await(task, instance)
 
+## True, wenn fuer stem bereits eine kompilierte Seite (.so/.pyd) liegt.
+func _cython_output_present(stem: String) -> bool:
+	var dir := DirAccess.open(workspace_dir() + "/scripts")
+	if dir == null:
+		return false
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if fname.begins_with(stem + ".") and (fname.ends_with(".so") or fname.ends_with(".pyd")):
+			return true
+		fname = dir.get_next()
+	return false
+
 func define_script(script_id: String, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
+	var pyx_err := _cython_run_style_guard(script_id)
+	if pyx_err != "":
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, pyx_err))
 	var entry := _script_entry(script_id)
 	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -505,7 +598,17 @@ func define_script(script_id: String, instance := PythonBridgeConfig.DEFAULT_INS
 ## execute, define UND hot reload identisch verwendet, damit der Python-
 ## Server genau den Context invalidiert, den die Calls nutzen.
 func _script_context(script_id: String) -> String:
+	if _script_entry_raw(script_id).get("is_cython", false):
+		return "cython:" + resolve_script_path(script_id)
 	return "script:" + resolve_script_path(script_id)
+
+## Registry-Rohzugriff ohne Kontext-Ableitung (fuer _script_context).
+func _script_entry_raw(script_id: String) -> Dictionary:
+	var path := resolve_script_path(script_id)
+	if not FileAccess.file_exists(path):
+		_script_registry.forget(path)
+		return {}
+	return _script_registry.entry_for(path)
 
 ## Deklariert Abhaengigkeiten aus GDScript (statt/als Ergaenzung zu
 ## __bridge_deps__ im Python-Code und dependencies.txt). Muss VOR
@@ -576,7 +679,33 @@ func script_path_for(script_id: String, subfolder: String) -> String:
 func resolve_script_path(script_id: String) -> String:
 	if script_id.begins_with("/") or script_id.contains("://"):
 		return script_id
+	# .pyx (Cython) hat Vorrang vor .py - der Editor-Toggle speichert so.
+	var pyx := workspace_dir() + "/scripts/" + script_id + ".pyx"
+	if FileAccess.file_exists(pyx):
+		return pyx
 	return workspace_dir() + "/scripts/" + script_id + ".py"
+
+# ------------------------------------------------------------------ Cython
+func _on_cython_finished(report: Dictionary) -> void:
+	# Report nur zwischenspeichern; await-Aufloesung geschieht im Frame,
+	# der das Signal empfaengt (await _cython.finished gibt das Argument-Array).
+	pass
+
+func _cython_result(report: Dictionary) -> PythonBridgeResult:
+	if bool(report.get("ok", false)):
+		return PythonBridgeResult.success(report)
+	var msg := str(report.get("error", ""))
+	if msg == "" and not report.get("errors", []).is_empty():
+		var first: Dictionary = report["errors"][0]
+		msg = "%s: %s" % [first.get("file", "?"), first.get("message", "")]
+	if msg == "":
+		msg = "Cython-Build fehlgeschlagen (ohne Details)."
+	return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+		PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR, msg))
+
+func _cython_tick() -> void:
+	if _cython != null:
+		_cython.tick()
 
 # ------------------------------------------------------------------ Hot Reload
 ## Loest Hot Reload fuer ein Skript aus (konfigurierbarer Modus).

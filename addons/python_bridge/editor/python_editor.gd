@@ -38,6 +38,8 @@ var _dirty: Dictionary = {}         # script_id -> bool
 var _mtimes: Dictionary = {}        # script_id -> int (modified time on disk)
 var _last_poll_ms: int = 0
 var _loading := false               # suppress text_changed while swapping text
+var _cython_toggle: CheckButton = null  # 'Als Cython-Modul kompilieren'
+var _cython_stems: Dictionary = {}  # script_id -> true (Editor-State je Tab)
 
 func _init(bridge: Object = null) -> void:
 	_bridge = bridge
@@ -162,6 +164,20 @@ func _build_ui() -> void:
 	reload_btn.pressed.connect(_on_hot_reload)
 	actions.add_child(reload_btn)
 
+	var build_btn := Button.new()
+	build_btn.text = "Compile Cython"
+	build_btn.tooltip_text = "Alle .pyx-Module inkrementell kompilieren (Desktop; " \
+		+ "Compiler: System-CC oder ziglang-Fallback aus der venv)"
+	build_btn.pressed.connect(_on_cython_compile)
+	actions.add_child(build_btn)
+
+	_cython_toggle = CheckButton.new()
+	_cython_toggle.text = "Als Cython-Modul kompilieren (.pyx)"
+	_cython_toggle.tooltip_text = "Speichert diese Datei als .pyx statt .py. " \
+		+ "Der Build laeuft automatisch vor dem ersten Aufruf (Desktop-only)."
+	_cython_toggle.toggled.connect(func(on: bool) -> void: _set_cython_mode(_active_script_id(), on))
+	actions.add_child(_cython_toggle)
+
 	add_child(actions)
 
 	_log = RichTextLabel.new()
@@ -210,11 +226,17 @@ func refresh_scripts() -> void:
 		return
 	dir.list_dir_begin()
 	var entry := dir.get_next()
+	var cython_ids: Array = []
 	while entry != "":
 		if not dir.current_is_dir() and entry.ends_with(".py"):
 			_file_list.add_item(entry.get_basename())
+		elif not dir.current_is_dir() and entry.ends_with(".pyx"):
+			# .pyx erst nach den .py-Eintraegen sammeln, mit Marker.
+			cython_ids.append(entry.get_basename())
 		entry = dir.get_next()
 	dir.list_dir_end()
+	for cid in cython_ids:
+		_file_list.add_item(str(cid) + " (cython)")
 	_set_status("scripts: %d  (open tabs: %d)" % [_file_list.item_count, _open_order.size()])
 	_sync_list_selection()
 
@@ -332,6 +354,9 @@ func _activate_current() -> void:
 				_editor(id).text = str(bridge.call("get_script_source", id))
 				_loading = false
 				_append_log("[color=#7fd9ff]reloaded from disk: %s[/color]" % id)
+	# Cython-Toggle auf den Tab-Zustand setzen (ohne Signal-Loop).
+	if _cython_toggle != null:
+		_cython_toggle.set_pressed_no_signal(_is_cython_mode(id))
 	_sync_list_selection()
 	_set_status("open: %s" % id)
 
@@ -345,12 +370,16 @@ func _update_tab_label(script_id: String) -> void:
 	_tab_bar.set_tab_title(idx, _tab_label(script_id, bool(_dirty.get(script_id, false))))
 
 func _disk_mtime(script_id: String) -> int:
+	# Cython-Modus zuerst pruefen - die .pyx ist dann die kanonische Datei.
+	var pyx := _scripts_dir() + "/" + script_id + ".pyx"
+	if FileAccess.file_exists(pyx):
+		return FileAccess.get_modified_time(pyx)
 	var path := _scripts_dir() + "/" + script_id + ".py"
 	return FileAccess.get_modified_time(path) if FileAccess.file_exists(path) else -1
 
 func _script_file_exists(script_id: String) -> bool:
-	var path := _scripts_dir() + "/" + script_id + ".py"
-	return FileAccess.file_exists(path)
+	return FileAccess.file_exists(_scripts_dir() + "/" + script_id + ".py") \
+		or FileAccess.file_exists(_scripts_dir() + "/" + script_id + ".pyx")
 
 func _editor(script_id: String) -> CodeEdit:
 	return _editors.get(script_id, null) as CodeEdit
@@ -420,6 +449,8 @@ func _remove_tab(script_id: String) -> void:
 
 func _on_script_selected(index: int) -> void:
 	var name := _file_list.get_item_text(index)
+	# List-Marker " (cython)" ist nicht Teil der script_id.
+	name = name.trim_suffix(" (cython)")
 	open_script(name)
 
 func _on_text_changed_for(script_id: String) -> void:
@@ -449,6 +480,62 @@ func _on_new_script() -> void:
 		open_script(id))
 	dlg.popup_centered()
 
+# ------------------------------------------------------------------ Cython-Modus
+## Ist der Tab im Cython-Modus? (Datei liegt als .pyx vor ODER Toggle ist
+## fuer einen noch nie gespeicherten Tab aktiviert.)
+func _is_cython_mode(script_id: String) -> bool:
+	if bool(_cython_stems.get(script_id, false)):
+		return true
+	return FileAccess.file_exists(_scripts_dir() + "/" + script_id + ".pyx") \
+		and not FileAccess.file_exists(_scripts_dir() + "/" + script_id + ".py")
+
+## Toggle-Handler: Zustand je Tab merken; bei bereits vorhandener Datei die
+## Datei UMBENENNEN (Inhalt bleibt erhalten), Registry-Cache verwerfen.
+func _set_cython_mode(script_id: String, on: bool) -> void:
+	if script_id == "":
+		return
+	var was := _is_cython_mode(script_id)
+	if on:
+		_cython_stems[script_id] = true
+	else:
+		_cython_stems.erase(script_id)
+	if was == on:
+		return
+	var old_py := _scripts_dir() + "/" + script_id + ".py"
+	var new_pyx := _scripts_dir() + "/" + script_id + ".pyx"
+	if on and FileAccess.file_exists(old_py):
+		if DirAccess.rename_absolute(old_py, new_pyx) != OK:
+			_set_status("rename fehlgeschlagen: " + old_py)
+			return
+	elif not on and FileAccess.file_exists(new_pyx):
+		var back_py := _scripts_dir() + "/" + script_id + ".py"
+		if DirAccess.rename_absolute(new_pyx, back_py) != OK:
+			_set_status("rename fehlgeschlagen: " + new_pyx)
+			return
+	var bridge := _resolve_bridge()
+	if bridge and bridge.has_method("forget_script_cache"):
+		bridge.call("forget_script_cache", _scripts_dir() + "/" + script_id + ".py")
+		bridge.call("forget_script_cache", new_pyx)
+	_mtimes[script_id] = _disk_mtime(script_id)
+	refresh_scripts()
+	_set_status("Cython-Modus %s: %s" % ["AN" if on else "AUS", script_id])
+
+func _on_cython_compile() -> void:
+	var bridge := _resolve_bridge()
+	if bridge == null or not bridge.has_method("compile_cython"):
+		_set_status("compile_cython nicht verfuegbar")
+		return
+	_append_log("[b]cython build...[/b]")
+	_set_status("Cython-Build laeuft (inkrementell)...")
+	var res: PythonBridgeResult = await bridge.call("compile_cython", "", false)
+	if res and res.is_ok():
+		var rep: Dictionary = res.value
+		_append_log("[color=#7fd97f]cython ok:[/color] built=%s skipped=%s compiler=%s (%ss)"
+			% [rep.get("built", []), rep.get("skipped", []), rep.get("compiler", "?"), rep.get("duration_s", "?")])
+		_set_status("Cython-Build fertig")
+	else:
+		_log_error("cython build failed", res)
+
 # ------------------------------------------------------------------ Actions
 func _on_save() -> void:
 	_ensure_ui()
@@ -457,15 +544,29 @@ func _on_save() -> void:
 		_set_status("no script open")
 		return
 	var bridge := _resolve_bridge()
-	if bridge and bridge.has_method("create_script"):
-		var res: PythonBridgeResult = await bridge.call("create_script", id, _editor(id).text)
+	if bridge == null:
+		return
+	var cython := _is_cython_mode(id)
+	var res: PythonBridgeResult
+	if cython and bridge.has_method("create_cython_script"):
+		res = await bridge.call("create_cython_script", id, _editor(id).text)
 		if res and res.is_ok():
-			_dirty[id] = false
-			_mtimes[id] = _disk_mtime(id)
-			_update_tab_label(id)
-			_set_status("saved: " + id)
-		else:
-			_log_error("save failed", res)
+			# Nicht-Cython-Skripte dürfen nicht versehentlich Source senden,
+			# das der Server nie definieren soll - hier unerheblich, aber der
+			# Registry-Cache der .py-Variante muss weg, falls sie existierte.
+			if bridge.has_method("forget_script_cache"):
+				bridge.call("forget_script_cache", _scripts_dir() + "/" + id + ".py")
+	else:
+		res = await bridge.call("create_script", id, _editor(id).text)
+	if res and res.is_ok():
+		_dirty[id] = false
+		_mtimes[id] = _disk_mtime(id)
+		_update_tab_label(id)
+		_set_status("saved: %s%s" % [id, " (.pyx)" if cython else ""])
+		if cython:
+			_append_log("[color=#c7a3ff].pyx gespeichert - Build beim ersten Aufruf oder per \"Compile Cython\"[/color]")
+	else:
+		_log_error("save failed", res)
 
 func _on_run() -> void:
 	_ensure_ui()

@@ -19,8 +19,8 @@ const ROOTS := [
 	"res://addons/python_bridge/python",
 	"res://python_bridge",
 ]
-const EXTENSIONS := [".py", ".txt", ".json"]
-const SKIP_DIRS := ["venv", "tmp", "__pycache__", ".gdignore"]
+const EXTENSIONS := [".py", ".pyx", ".txt", ".json"]
+const SKIP_DIRS := ["venv", "tmp", "__pycache__", "cython_build_tmp", ".gdignore"]
 const MAX_FILE_BYTES := 8 * 1024 * 1024  # Schutz gegen versehentliche Riesen-Dateien
 
 

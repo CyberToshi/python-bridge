@@ -383,15 +383,52 @@ class ScriptHost:
             return None, _error(type(exc).__name__, exc)
         return ns.get("result"), None
 
+    def _import_cython_module(self, ctx, context_id):
+        """Cython-Sonderpfad (Desktop): importiert das kompilierte Modul
+        (.so/.pyd im Skript-Ordner, dort ist der Pfad auf sys.path) und legt
+        seine oeffentlichen Funktionen in den Kontext-Namespace - damit
+        verhaelt sich ein Cython-Skript beim call_script wie ein .py-Skript.
+        Der Kontext gilt danach als definiert (source_hash-Marker)."""
+        stem = context_id.rsplit("/", 1)[-1]
+        if stem.endswith(".pyx"):
+            stem = stem[:-4]
+        try:
+            mod = importlib.import_module(stem)
+        except ImportError as exc:
+            return _error(
+                "CythonModuleNotFound",
+                "Kein kompiliertes Modul '%s' gefunden (%s). "
+                "Erst kompilieren: Editor-Speichern mit aktivierter "
+                "Cython-Option oder PythonBridge.compile_cython()."
+                % (stem, exc),
+                code=protocol.CATEGORY_TASK_ERROR)
+        except Exception as exc:  # noqa: BLE001 - Importfehler ehrlich melden
+            return _error(type(exc).__name__, exc)
+        for name in dir(mod):
+            if not name.startswith("_"):
+                ctx.namespace[name] = getattr(mod, name)
+        ctx.namespace[stem] = mod
+        ctx.code = None
+        ctx.source_hash = "cython:" + stem
+        return None
+
     def call(self, context_id, source, function, args, kwargs, source_hash=None):
         """Ruft eine Funktion im Context auf. Enthaelt die Nachricht einen
         source, wird nur bei veraendertem Hash neu definiert. Ohne source
         wird direkt aufgerufen, wenn die Context-Version zum source_hash
-        passt (ScriptRegistry); sonst SCRIPT_NOT_DEFINED."""
+        passt (ScriptRegistry); sonst SCRIPT_NOT_DEFINED.
+
+        Cython-Kontexte (Praefix "cython:") laden statt Source das
+        kompilierte Modul; der Namespace bleibt ueber Calls persistent."""
         ctx = self._context(context_id)
         if source_hash is None:
             source_hash = _hash(source) if source else ""
-        if source:
+        if not source and context_id.startswith("cython:"):
+            if ctx.source_hash is None:
+                err = self._import_cython_module(ctx, context_id)
+                if err is not None:
+                    return None, err
+        elif source:
             if ctx.source_hash != source_hash:
                 _, err = self.define(context_id, source, source_hash)
                 if err is not None:

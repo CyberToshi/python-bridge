@@ -264,6 +264,17 @@ def check_project(project: Path, target: str, websocket_url: str = "", fix: bool
                  "Python runs in the browser via Pyodide/WebAssembly in a Web Worker "
                  "(virtual filesystem, no server required). Static hosting only.")
 
+            # Cython-Guard: im Browser gibt es keinen C-Compiler - .pyx kann
+            # dort nicht gebaut oder geladen werden. Ehrlich warnen statt
+            # still kaputten Skripten in den Export zu packen.
+            scripts = project / "python_bridge" / "scripts"
+            if scripts.is_dir() and list(scripts.glob("*.pyx")):
+                names = ", ".join(p.name for p in sorted(scripts.glob("*.pyx")))
+                _add(report, "web.cython", "warning",
+                     f".pyx scripts found ({names}): Cython modules cannot build or load "
+                     f"in the browser (no C compiler in Pyodide/WASM). They are desktop-only; "
+                     f"excluded from web execution.", True)
+
             worker_src = project / "addons" / "python_bridge" / "web" / "bridge_worker.js"
             if worker_src.is_file():
                 _add(report, "web.worker", "pass", "Pyodide worker script found in the addon")
