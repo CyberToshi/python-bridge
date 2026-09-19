@@ -27,6 +27,9 @@ func _enter_tree() -> void:
 	_panel.name = "Python Bridge"
 	add_control_to_dock(DockSlot.DOCK_SLOT_RIGHT_UL, _panel)
 
+	# Export-Plugin: .py/.txt/.json/.md automatisch in jeden Export packen.
+	_ensure_export_plugin()
+
 	# Optionaler Hochleistungspfad (GDScript -> C++ -> GDExtension).
 	# Dieser Dock ist unabhaengig vom Python-Dock; er nutzt den bundled
 	# GDScript2All-Transpiler und erzeugt eine GDExtension-Scaffold-Struktur.
@@ -45,6 +48,7 @@ func _enter_tree() -> void:
 func _exit_tree() -> void:
 	# Sauberer Shutdown aller Python-Instanzen, danach Dock + Autoload
 	# entfernen.
+	_remove_export_plugin()
 	var pb := _get_bridge()
 	if pb:
 		pb.call("shutdown_now")
@@ -73,3 +77,24 @@ func _process(_delta: float) -> void:
 
 func _get_bridge() -> Node:
 	return get_node_or_null("/root/" + AUTOLOAD_NAME)
+
+# ------------------------------------------------------------------ Export
+## Godot packt in Standard-Exports nur Ressourcen, KEINE .py/.txt-Dateien.
+## Ohne Export-Plugin fehlen im Export (Desktop UND Web) die Bridge-
+## Python-Runtime und alle Workspace-Skripte - die Bridge kann dort nicht
+## starten. Der EditorExportPlugin (core/export_plugin.gd) ergaenzt die
+## Dateien beim Export automatisch.
+var _export_plugin: EditorExportPlugin = null
+
+func _ensure_export_plugin() -> void:
+	if _export_plugin != null:
+		return
+	var script := load(get_script().resource_path.get_base_dir() + "/core/export_plugin.gd") as GDScript
+	if script:
+		_export_plugin = script.new()
+		add_export_plugin(_export_plugin)
+
+func _remove_export_plugin() -> void:
+	if _export_plugin != null:
+		remove_export_plugin(_export_plugin)
+		_export_plugin = null

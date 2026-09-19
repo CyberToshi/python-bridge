@@ -14,8 +14,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # der dieselben Pfade via browser_host.bootstrap() setzt): `import
 # modules.rechner` funktioniert damit auf Desktop und im Browser identisch.
 # --tmpdir zeigt auf <workspace>/tmp, der Workspace liegt einen Level höher.
-_tmpdir_parent = Path(sys.argv[sys.argv.index("--tmpdir") + 1]).resolve().parent \
-    if "--tmpdir" in sys.argv else None
+# Beide CLI-Formen unterstuetzen: "--tmpdir x" und "--tmpdir=x".
+def _arg_value(name):
+    argv = sys.argv
+    if name in argv:
+        i = argv.index(name)
+        if i + 1 < len(argv):
+            return argv[i + 1]
+        return None
+    for a in argv:
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+_tmp = _arg_value("--tmpdir")
+_tmpdir_parent = Path(_tmp).resolve().parent if _tmp else None
 if _tmpdir_parent:
     # Root zuerst: macht `modules`/`plugins` als Namespace-Pakete importierbar
     # (`import modules.rechner`), die Unterordner erlauben direkte Imports

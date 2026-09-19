@@ -83,11 +83,19 @@ if result.is_error():
 | print() aus Python fehlt in Godot | Ausgaben werden nicht durchgereicht | Werte per `return` liefern und in GDScript printen (Details: [Python-Seite](./python-seite)) |
 | Task endet mit Timeout trotz kurzer Funktion | Queue-Timeout (Wartezeit) | `queue_timeout_ms` erhöhen oder Instanz entlasten |
 
+## Abhängigkeiten & ImportError
+
+| Symptom | Ursache | Lösung |
+|---|---|---|
+| `NameError: name 'np' is not defined` | numpy erst **innerhalb** der Funktion importiert – Kontext-Cache führt den Funktions-Body mit `np` aus, das im Namespace fehlt | `import numpy as np` **auf Modulebene** (oben in die Datei) |
+| `ModuleNotFoundError` bei Aufruf | Paket fehlt in der venv | `__bridge_deps__ = ["numpy", ...]` in die Skript-Datei schreiben **oder** `dependencies` konfigurieren – die Bridge installiert dann automatisch |
+| `DEPENDENCY_ERROR` beim Aufruf | Paket nicht installierbar (kein Netz, falscher Name, Pyodide-Paket fehlt im Bundle) | Paketname prüfen; im Web: Paket in `--packages` bzw. `__bridge_deps__` aufnehmen und Bundle neu bauen |
+
 ## Große Daten & Frame-Ruckler
 
 | Symptom | Ursache | Lösung |
 |---|---|---|
-| `SERIALIZATION_ERROR`: Ergebnis zu groß | Antwort > `max_result_bytes` | Limit erhöhen **oder** numpy-Ergebnis nutzen (→ automatischer DataRef) |
+| `SERIALIZATION_ERROR`: Ergebnis zu groß | Antwort > `max_result_bytes` – seit v0.3.2 wird das **vor** der Serialisierung per Größen-Schätzung erkannt (kostet keine Sekunden mehr im WASM-Heap) | Limit erhöhen **oder** numpy-Ergebnis nutzen (→ automatischer DataRef) |
 | Frame-Ruckler bei großer Antwort | Decode-Budget pro Frame | `max_decode_bytes_per_frame`/`max_results_per_frame` anpassen (sollte bei Defaults nicht nötig sein) |
 | `DataRef stale` | Instanz neu gestartet oder Handle freigegeben | Neues Ergebnis erzeugen; Handles sind prozessgebunden |
 | Datei-Transport schlägt fehl | Datei fehlt/Prüfsumme | `materialize_data` erneut; Daten neu erzeugen |

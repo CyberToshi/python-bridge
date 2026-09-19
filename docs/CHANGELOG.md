@@ -1,5 +1,116 @@
 # Changelog
 
+## v0.3.2 (current)
+
+### Ergebnis-Budget & geordnetes Shutdown (Hardening-Runde)
+
+- **Result-Budget vor dem Encoding (2.7)**: Ergebnisse, die
+  `max_result_bytes` ueberschreiten, werden jetzt VOR der Serialisierung
+  abgelehnt (billige Groessen-Schaetzung, ndarray exakt via `nbytes`;
+  zyklus- und rekursions-sicher). Bisher wurde erst komplett kodiert
+  (2-3x Speicherkopien) und dann abgelehnt - im Browser (WASM-Heap) der
+  typische OOM-Moment. Antwort ist jetzt ein sofortiger strukturierter
+  `SERIALIZATION_ERROR` (`ResultTooLargeError`), single und pro Batch-Item;
+  der nachgelagerte Frame-Check bleibt als Backstop.
+- **Geordnete Shutdown-Antworten (4.2)**: Beim Shutdown wartende Queue-Jobs
+  bekommen jetzt eine strukturierte `task_error` (`CONNECTION_ERROR`),
+  bevor die Verbindung geschlossen wird - statt still verworfen zu werden
+  (frueher: Timeout-Raten auf Godot-Seite). In-flight-Jobs sind technisch
+  nicht wartbar (Threads sind nicht killbar); dokumentierte Grenze.
+- **Exit-Codes propagieren (4.3)**: Server-Fehler (z. B. fehlendes
+  `websockets`) enden mit Log + Exit 1 statt stummem Exit 0; geordnete
+  Beendigung bleibt Exit 0. Godots Restart-Policy kann damit defekte
+  Server von sauberen Stops unterscheiden.
+- **Lifecycle-Logging auf fd 2**: `execute_job` redirectet sys.stdout UND
+  sys.stderr prozessweit, solange ein Task laeuft - Shutdown-/Fatal-Logs
+  verschwanden bisher unsichtbar im Task-Puffer. `_server_log` schreibt
+  jetzt direkt auf Datei-Deskriptor 2 (nur die Python-Objekte, nie die
+  FDs werden getauscht) - Beweis via strace im Live-E2E.
+- Neuer Live-E2E-Test (`tests/live_e2e_hardening.py`): echte Server-
+  Prozesse, 11 Szenarien (Budget-Latenz, Drain-Reihenfolge, Exit-Codes).
+
+### Robustheit & Korrektheit (Review-Runde)
+
+- **`read_region`/`write_region`**: Warfen zuvor `AttributeError` (das
+  Backend-Modul hatte keine `read`/`write`-Methoden). Nutzen jetzt ein
+  modulweites Backend-Singleton mit korrekter Handle-Verwaltung
+  (funktional getestet: create → write → read Roundtrip).
+- **Wrapper-Generator / Introspektion**: Defaults bei
+  positional-only-Parametern (`def f(a, b, /, c=1)`) wurden falsch
+  zugeordnet (`a`/`b` erbten die Defaults von `c`/`d`). Korrekt:
+  posonly+pos bilden EINE Sequenz, Defaults binden von hinten.
+- **Kooperative Cancellation**: `cancel_requested()` konsumiert das
+  Cancel-Flag nicht mehr — Muster wie `if cancel_requested(): checkpoint()`
+  oder `while not cancel_requested(): ...` bleiben jetzt zuverlässig.
+  Aufgeräumt wird am Job-Start (`consume_cancelled`).
+- **Port-Datei atomar**: Die `tmp/<tag>.json` (Port+PID) wird per
+  `os.replace` geschrieben — kein halbfertiges JSON mehr beim parallelen
+  STARTING-Poll.
+- **`run_server.py --tmpdir=x`**: Beide CLI-Formen (`--tmpdir x` und
+  `--tmpdir=x`) werden unterstützt; zuvor brach die `=`-Form den
+  Workspace-Import-Pfad.
+- **Shared Memory auf allen Plattformen**: `multiprocessing.shared_memory`
+  funktioniert auf Windows (CreateFileMapping) und macOS (POSIX shm) —
+  die frühere Linux-Beschränkung wurde entfernt (dokumentiert).
+- **Serializer**: `datetime`/`date`/`time`, `Decimal`, `UUID`,
+  `pathlib.Path` und `enum.Enum` bekommen eigene Tags (`dt`, `dec`,
+  `uuid`, `path`, `enum`) statt des repr-String-Fallbacks; auf Godot-Seite
+  strukturiert dekodiert (Strings bzw. Enum-Wert).
+- **`_CappedWriter`**: `write()` gibt die tatsächlich übernommenen Zeichen
+  zurück (verhindert verfälschte `print()`-Rückgabewerte).
+- **Web-Worker-Fehlerpfade**: Nach einem Startup-Fehler wird der Worker
+  wieder startbar (Retry möglich); Bridge-Messages vor `ready` bekommen
+  eine strukturierte `task_error`-Antwort statt Funkstille (kein
+  Task-Timeout mehr beim Warten auf einen noch nicht bereiten Host).
+
+### Desktop-Export (v0.3.1-Fixes, hier dokumentiert)
+
+- Workspace liegt im Export unter `user://python_bridge/` — PCK-Inhalte
+  werden beim ersten Start dorthin seediert, OS-Prozesse können aus dem
+  PCK nicht lesen.
+- Korrektes Feature-Tag (`template` statt `export`) für die
+  Export-Erkennung; Web-Transport erkennt seinen Zustand über
+  `OS.has_feature("web")` statt über die Client-Existenz.
+- Web-Connect-Timeout 120 s (Pyodide-Kaltstart vom CDN), Desktop bleibt
+  bei 20 s.
+
+## v0.3.1
+
+### Abhängigkeiten direkt im Python-Code deklarieren
+
+- **`__bridge_deps__ = ["numpy", "pandas>=2.0"]`** in der ersten Zeile eines
+  Workspace-Skripts ist die Single Source of Truth für dessen Pakete —
+  der Python-Code selbst sagt der Bridge, was er braucht.
+- **Desktop**: Der Provisioner liest alle Deklarationen automatisch mit
+  (`combined_requirements`: Skripte + `configure("dependencies")` +
+  `config/dependencies.txt`) und installiert sie im venv-Lauf. Fehlt beim
+  ersten Call ein neu deklariertes Paket, installiert der Server es direkt
+  in die laufende venv (ein pip-Lauf, strukturierte Fehler bei Misserfolg).
+  Alternativ startet `call_script` die Instanz einmal neu (Auto-Restart,
+  einmal pro Skript-Version).
+- **Web**: `build_web_bundle.py` schreibt `bridge_deps.json`; der Pyodide-
+  Worker lädt deklarierte Pakete vor der ersten Message (gleicher Mechanismus
+  wie `web_packages`) und registriert sie am Host. Fehlende Pakete erzeugen
+  auf Web einen klaren DEPENDENCY_ERROR mit Rebuild-Hinweis — nie pip, nie
+  stille Fehlverhalten.
+- **Executor-Gate**: Deklarierte, aber nicht importierbare Pakete führen zu
+  einem strukturierten `DEPENDENCY_ERROR` BEVOR Nutzercode läuft (statt
+  NameError/ImportError mitten im Aufruf). Bereits geladene/verifizierte
+  Pakete (Provisioner-HELLO-Kappe `installed_dependencies`) werden ohne
+  erneute Probe akzeptiert.
+- **Neue API**: `PythonBridge.register_dependencies(["numpy", ...])` schreibt
+  `config/dependencies.txt` (idempotent, dedupliziert) für die nächste
+  Instanz-Startphase.
+- **Tools im Addon**: `export_check.py` und `build_web_bundle.py` liegen
+  jetzt auch unter `addons/python_bridge/tools/` — der Beispiel-/Export-
+  Workflow braucht kein Repository-Checkout mehr.
+- **Fix**: Der Provisioner-Verify prüft jetzt ALLE kombinierten Requirements
+  (vorher nur `configure()`-Liste); der Fast-Path re-prüft neue Deklarationen,
+  statt eine veraltete venv still zu akzeptieren.
+- **Tests**: 20 neue Tests (Extraktion, Executor-Gate, Auto-Install,
+  Batch-Fehlerform, Web-Verhalten ohne pip); 156/156 grün, Web-Runtime
+  20/20 PASS mit echtem Bundle.
+
 ## v0.3.0
 
 ### Web-Transport (Pyodide)
@@ -121,7 +232,7 @@
 Python-Suite 74 Tests (9 Worker-/Cancel-Unit-Tests, 4 Worker-
 Integrationstests inkl. Kill-on-Runaway).
 
-## v0.2.1 (current)
+## v0.2.1
 
 ### Neu: Demo-Szene & Dokumentations-PDF
 

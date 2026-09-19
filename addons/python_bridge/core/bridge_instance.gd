@@ -38,6 +38,7 @@ var state: int = State.NONE
 var _settings: Dictionary = {}
 var _client: BridgeConnectionManager = null
 var _provisioner: BridgeProvisioner = null
+var _installed_dependencies: PackedStringArray = []
 var _process: BridgeProcessManager = null
 var _health: BridgeHealthMonitor = null
 
@@ -70,6 +71,9 @@ func start() -> void:
 
 func _on_provision_done(ok: bool, msg: String) -> void:
 	if _provisioner:
+		# Verifizierte Paketliste fuer die HELLO-Kappe sichern (Skript-
+		# Dependency-Pruefung auf Serverseite spart dann find_spec-Probes).
+		_installed_dependencies = _provisioner.verified_dependencies()
 		_provisioner = null
 	if not ok:
 		_last_error = msg
@@ -89,7 +93,11 @@ func _launch() -> void:
 			_process.kill()
 		_process.forget()
 	var ws: String = str(_settings.get("workspace_fs", ""))
-	var runner: String = str(_settings.get("bridge_python_dir", "")) + "/run_server.py"
+	# Export: der Runner liegt REAL im Workspace (der Provisioner kopiert
+	# die Bridge-Runtime aus dem PCK dorthin) - ein OS-Prozess kann nicht
+	# aus dem PCK lesen. Im Editor bleibt der Addon-Pfad (echte Dateien).
+	var runner: String = ws + "/bridge/run_server.py" if OS.has_feature("template") \
+		else str(_settings.get("bridge_python_dir", "")) + "/run_server.py"
 	if ws == "" or runner == "/run_server.py":
 		_last_error = "Python workspace or bundled runner path is not configured."
 		_set_state(State.ERROR)
@@ -157,7 +165,15 @@ func tick() -> void:
 			if _provisioner:
 				_provisioner.tick()
 		State.STARTING:
-			_probe_temp_file()
+			if OS.has_feature("web") or bool(_settings.get("web_transport", false)):
+				# Web transport: kein Subprocess und keine Port-Datei. Der JS-Worker
+				# meldet {type:"ready"}, BridgeWebConnection flippt `connected` -
+				# der geerbte CONNECTING-Poll uebernimmt dann den Handshake.
+				# (Diskriminator ist der TRANSPORT, nicht _client - auf Desktop
+				# existiert _client ab _launch() ebenfalls!)
+				_set_state(State.CONNECTING)
+			else:
+				_probe_temp_file()
 		State.CONNECTING:
 			_client.poll()
 			if _client.is_open():
@@ -231,6 +247,11 @@ func _send_hello() -> void:
 		"type": PythonProtocol.MSG_HELLO,
 		"id": "hello-" + instance_name,
 	}
+	# Bereits in der venv verifizierte Pakete (Provisioner-Ergebnis) dem
+	# Server bekannt geben: Die Skript-Dependency-Pruefung akzeptiert diese
+	# Namen, ohne jedes Mal find_spec zu bemuehen.
+	if not _installed_dependencies.is_empty():
+		msg["caps"] = {"installed_dependencies": Array(_installed_dependencies)}
 	_client.send_message(msg)
 
 func _probe_temp_file() -> void:
@@ -278,6 +299,11 @@ func _handle_message(parsed: Dictionary) -> void:
 			_health.record_pong()
 		PythonProtocol.MSG_SHUTDOWN_ACK:
 			_shutdown_ack_received = true
+		PythonProtocol.MSG_CANCEL_ACK:
+			# Kooperative Bestaetigung eines Client-Cancels; der TaskManager
+			# hat den Task bereits als gefallen verbucht - hier nur nicht
+			# als "unknown message" spamen.
+			pass
 		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT, PythonProtocol.MSG_STATUS, PythonProtocol.MSG_DATA_RESULT, PythonProtocol.MSG_DATA_ACK:
 			message_received.emit(instance_name, parsed)
 		_:

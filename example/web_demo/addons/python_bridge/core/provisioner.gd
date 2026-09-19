@@ -23,12 +23,21 @@ var _log: Array[String] = []
 var _py: String = ""
 var _venv_py: String = ""
 var _req_file: String = ""
+var _venv_probe_ms: int = -1500  # cooldown clock for the venv readiness probe
 var _pip_log: String = ""
+var _pip_pid: int = -1
+var _pip_exit: int = -1
+var _pip_seen_running: bool = false
+var _verify_probe_ms: int = -10000  #Cooldown; erster Verify-Probe sofort
+var _flatpak: bool = false
 
 func start(cfg: Dictionary, target: Object, method: String) -> void:
 	_cfg = cfg
 	_target = target
 	_method = method
+	_flatpak = BridgeProcessManager.in_flatpak()
+	if _flatpak:
+		_log.append("[PROV] Flatpak erkannt - pip-Fortschritt wird per Verifikation gepollt.")
 	_prepare()
 
 func wait() -> void:
@@ -46,15 +55,35 @@ func tick() -> void:
 			elif now - _start_ms > 300000:
 				_fail("[PROV] venv-Erstellung Timeout (300s). Befehl: %s -m venv %s" % [_py, _venv_py.get_base_dir().get_base_dir()])
 		Phase.PIP:
-			if _pip_done():
-				_log.append("[PROV] Dependencies ok.")
-				# Verify that every configured dependency is actually importable
-				# in the venv (structured DEPENDENCY_ERROR on failure).
-				if not _verify_imports():
-					_fail("[PROV] Dependency verification failed. Details in log above.")
-					return
-				_finish(true)
-			elif now - _start_ms > 300000:
+			# flatpak-spawn --host: die Spawn-PID gehoert zum Host-Relay und
+			# kehrt sofort zurueck - PID-Tracking ist hier strukturell nutzlos.
+			# Die Phase endet stattdessen, wenn die Verifikation tatsaechlich
+			# importierbare Pakete findet (Probes mit Cooldown). Im nicht-
+			# Flatpak-Fall wartet die Phase wie gehabt auf das reale pip-Ende.
+			var handled := false
+			if _flatpak:
+				if now - _verify_probe_ms >= 2000:
+					_verify_probe_ms = now
+					# _pip_done() (websockets vorhanden) deckt den Fall ohne
+					# Skript-Deps ab: pip installiert websockets immer, das
+					# Erscheinen markiert das Installationsende zuverlaessig.
+					if _pip_done() and _verify_imports(true):
+						_log.append("[PROV] Dependencies ok.")
+						_finish(true)
+						handled = true
+			elif _pip_finished():
+				handled = true
+				if _pip_exit == 0:
+					_log.append("[PROV] Dependencies ok.")
+					# Verify that every configured dependency is actually
+					# importable in the venv (structured DEPENDENCY_ERROR).
+					if not _verify_imports():
+						_fail("[PROV] Dependency verification failed. Details in log above.")
+						return
+					_finish(true)
+				else:
+					_fail("[PROV] pip install fehlgeschlagen (Exit %d). Log: %s" % [_pip_exit, _pip_log])
+			if not handled and now - _start_ms > 300000:
 				_fail("[PROV] pip install Timeout (300s). Log: " + _pip_log)
 
 func is_done() -> bool:
@@ -63,13 +92,25 @@ func is_done() -> bool:
 ## The venv is only usable once its bundled pip exists: `venv/bin/python`
 ## appears early during `python -m venv`, while ensurepip bootstraps pip
 ## afterwards. Starting pip earlier fails with "No module named pip".
+## A bare folder check is NOT enough: pip's vendor tree is written over
+## several ticks, so a half-written pip can exist (crash:
+## "No module named pip._vendor.pyparsing.util"). We therefore probe with
+## a real import and a cooldown between probes (no threads, no busy-wait).
 func _venv_ready() -> bool:
 	if not FileAccess.file_exists(_venv_py):
 		return false
-	var sp := _site_packages()
-	if sp == "":
-		return false
-	return DirAccess.dir_exists_absolute(sp + "/pip")
+	var now := Time.get_ticks_msec()
+	if now - _venv_probe_ms < 1500:
+		return false  # cooldown: give ensurepip time between probes
+	_venv_probe_ms = now
+	var out: Array = []
+	var code := "import pip, pip._internal.cli.main; print('ok')"
+	var ec := BridgeProcessManager.execute(PackedStringArray([
+		_venv_py, "-c", code]), out, true)
+	if ec == 0:
+		return true
+	_log.append("[PROV] venv-Probe noch nicht bereit (pip-Import), warte ...")
+	return false
 
 func _prepare() -> void:
 	var ws: String = str(_cfg.get("workspace_fs",
@@ -106,8 +147,13 @@ func _prepare() -> void:
 	_pip_log = tmp_dir + "/pip.log"
 	_write_requirements(_req_file)
 
-	# Schon alles da? Dann direkt fertig.
+	# Schon alles da? Dann direkt fertig - AUSSER neu deklarierte
+	# Skript-Dependencies (__bridge_deps__) fehlen noch in der venv.
 	if FileAccess.file_exists(_venv_py) and _pip_done():
+		if not _verify_imports():
+			_log.append("[PROV] Neue Skript-Dependencies fehlen - pip-Lauf noetig.")
+			_start_pip()
+			return
 		_log.append("[PROV] venv und Dependencies bereits vorhanden.")
 		_finish(true)
 		return
@@ -122,7 +168,7 @@ func _prepare() -> void:
 		BridgeProcessManager.spawn(PackedStringArray([_py, "-m", "venv", venv]))
 
 func _start_pip() -> void:
-	_log.append("[PROV] pip install (websockets + Entwickler-Dependencies) ...")
+	_log.append("[PROV] pip install (websockets + Skript-Dependencies) ...")
 	_phase = Phase.PIP
 	_start_ms = Time.get_ticks_msec()
 	var args := PackedStringArray([
@@ -133,36 +179,94 @@ func _start_pip() -> void:
 	])
 	var argv := PackedStringArray([_venv_py])
 	argv.append_array(args)
-	BridgeProcessManager.spawn(argv)
+	_pip_pid = BridgeProcessManager.spawn(argv)
+	_pip_exit = -1
+	_pip_seen_running = false
+	_verify_probe_ms = -10000  # erster Verify-Probe sofort (Flatpak-Pfad)
+	if _pip_pid <= 0:
+		_fail("[PROV] pip konnte nicht gestartet werden.")
 
-## Verifies that the configured dependencies can be imported with the venv
-## Python. Uses a short, blocking OS.execute call - this is acceptable here
-## because provisioning runs once at startup and never on the hot path.
-## Returns true when every dependency imports, false otherwise.
-func _verify_imports() -> bool:
-	var deps: Array = _cfg.get("dependencies", [])
+## True, wenn der pip-Prozess beendet ist (Exit-Code wird dann in
+## _pip_exit geschrieben). Kein Dateisystem-Proxy: nur das reale Ende des
+## Installationsprozesses schliesst die Phase ab. Ein kurzes Grace-Fenster
+## fängt den Spawn-Race ab (is_process_running kann einen Tick zu früh
+## false liefern, bevor der Prozess registriert ist).
+func _pip_finished() -> bool:
+	if _pip_pid <= 0:
+		return true
+	if OS.has_method("is_process_running") and OS.is_process_running(_pip_pid):
+		_pip_seen_running = true
+		return false
+	if not _pip_seen_running and Time.get_ticks_msec() - _start_ms < 2000:
+		return false  # Spawn-Registrierung abwarten
+	_pip_exit = OS.get_process_exit_code(_pip_pid)
+	return true
+
+## Verifies that every combined requirement is present in the venv's
+## site-packages (package dir OR *.dist-info - pip's own install record).
+##
+## Bewusst KEIN Import-Probe mehr per OS.execute: In der Flatpak-Sandbox
+## liefert der Umweg ueber flatpak-spawn --host unzuverlaessige Exit-Codes,
+## wodurch eine erfolgreiche Installation als fehlend galt (Timeout trotz
+## fertigem pip - pip.log beweist "Requirement already satisfied"). Der
+## Dateisystem-Nachweis ist shell-agnostisch und genau.
+## Restrisiko (Halbgeschriebenes im Extraktionsfenster) deckt der
+## Executor-Dependency-Gate zur Laufzeit ab.
+## `quiet=true` unterdrueckt FEHLT-Logzeilen (Polling wuerde sie spammen).
+func _verify_imports(quiet := false) -> bool:
+	# Alle kombinierten Requirements pruefen (inkl. __bridge_deps__ und
+	# dependencies.txt), nicht nur die configure()-Liste.
+	var deps: Array = []
+	for spec in PythonBridgeDependencyManager.combined_requirements(
+			str(_cfg.get("workspace_fs", "")), _cfg.get("dependencies", PackedStringArray())):
+		deps.append(spec)
 	if deps.is_empty():
 		return true
+	var sp := _site_packages()
+	if sp == "":
+		if not quiet:
+			_log.append("[PROV] site-packages nicht auffindbar.")
+		return false
 	var ok := true
 	for dep in deps:
 		var mod := str(dep).split("==")[0].split(">=")[0].split("<")[0].strip_edges()
 		if mod == "":
 			continue
-		var out: Array = []
-		var exit_code := BridgeProcessManager.execute(PackedStringArray([
-			_venv_py, "-c", "import importlib; importlib.import_module(%s)" % JSON.stringify(mod)]),
-			out, true)
-		if exit_code != 0:
+		if not _dist_present(sp, mod):
 			ok = false
-			_log.append("[PROV] FEHLT: dependency '%s' konnte nicht importiert werden" % mod)
+			if not quiet:
+				_log.append("[PROV] FEHLT: dependency '%s' nicht in site-packages" % mod)
 	return ok
+
+## True, wenn ein Paket im site-packages-Ordner nachweisbar installiert
+## ist: Paketverzeichnis ODER pip-eigene *.dist-info (Modulname als
+## Praefix, case-insensitiv). Wird von _pip_done UND _verify_imports
+## genutzt (websockets inklusive - keine hartkodierte Version mehr).
+func _dist_present(sp: String, mod: String) -> bool:
+	if mod == "":
+		return false
+	if DirAccess.dir_exists_absolute(sp + "/" + mod):
+		return true
+	var dir := DirAccess.open(sp)
+	if dir == null:
+		return false
+	var prefix := mod.to_lower() + "-"
+	var found := false
+	dir.list_dir_begin()
+	var entry := dir.get_next()
+	while entry != "":
+		if entry.to_lower().begins_with(prefix) and entry.ends_with(".dist-info"):
+			found = true
+			break
+		entry = dir.get_next()
+	dir.list_dir_end()
+	return found
 
 func _pip_done() -> bool:
 	var sp := _site_packages()
 	if sp == "":
 		return false
-	return DirAccess.dir_exists_absolute(sp + "/websockets") \
-		or FileAccess.file_exists(sp + "/websockets-17.1.dist-info")
+	return _dist_present(sp, "websockets")
 
 func _site_packages() -> String:
 	if _venv_py == "":
@@ -186,6 +290,18 @@ func _finish(ok: bool) -> void:
 	_phase = Phase.DONE_OK if ok else Phase.DONE_ERR
 	if _target:
 		_target.call(_method, ok, "\n".join(_log))
+
+func verified_dependencies() -> PackedStringArray:
+	"""Kleingeschriebene Import-Namen der kombinierten Requirements (nach
+	erfolgreicher Provisionierung alle importierbar). Die Instanz meldet
+	diese Liste im HELLO an den Python-Server."""
+	var out := PackedStringArray()
+	for spec in PythonBridgeDependencyManager.combined_requirements(
+			str(_cfg.get("workspace_fs", "")), _cfg.get("dependencies", PackedStringArray())):
+		var name := str(spec).split("==")[0].split(">")[0].split("<")[0].strip_edges().to_lower()
+		if name != "":
+			out.append(name)
+	return out
 
 func _fail(msg: String) -> void:
 	_log.append(msg)
@@ -315,12 +431,10 @@ func _write_requirements(req_file: String) -> void:
 	var extra := ""
 	var ws: String = str(_cfg.get("workspace_fs",
 		ProjectSettings.globalize_path(str(_cfg.get("workspace_dir", "res://python_bridge")))))
-	var dep_path := ws + "/config/dependencies.txt"
-	if FileAccess.file_exists(dep_path):
-		var file := FileAccess.open(dep_path, FileAccess.READ)
-		extra += file.get_as_text()
-		file.close()
-	for dep in _cfg.get("dependencies", []):
+	# NEU: __bridge_deps__-Deklarationen aus allen Workspace-Skripten sind
+	# Teil der Requirements (Single Source of Truth im Python-Code).
+	for dep in PythonBridgeDependencyManager.combined_requirements(
+			ws, _cfg.get("dependencies", PackedStringArray())):
 		extra += str(dep) + "\n"
 	var out := FileAccess.open(req_file, FileAccess.WRITE)
 	if out:

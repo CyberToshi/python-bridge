@@ -30,3 +30,8 @@ GdScript2All-*/
 **/python_bridge/tmp/
 **/python_bridge/config/
 build/
+
+# Node: Pyodide-Paket fuer den Web-Runtime-Test (test_web_runtime.mjs)
+node_modules/
+package-lock.json
+package.json

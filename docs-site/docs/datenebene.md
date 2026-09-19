@@ -35,6 +35,9 @@ JSON-Zahlenlisten kodiert. Die Konvertierung ist automatisch und beidseitig.
 | `PackedInt32Array` | klein: `list`; groß: numpy-`int32` | Große → Binär-Chunk |
 | `PackedInt64Array` | klein: `list`; groß: numpy-`int64` | Große → Binär-Chunk |
 | – | numpy `ndarray` | 1-D → typisiertes Packed-Array; mehrdimensional → Array von Zeilen |
+| – | `datetime` / `date` / `time` | kommen als ISO-8601-`String` an (seit v0.3.2) |
+| – | `Decimal`, `UUID`, `pathlib.Path` | kommen als exakter `String` an (seit v0.3.2) |
+| – | `enum.Enum` | kommt als Wert des Enums an, z. B. `str`/`int` (seit v0.3.2) |
 | – | anderes Objekt | kommt als `String` (repr) bzw. `null` an (`pyobject`/`unsupported`) |
 
 Große strukturierte Daten sollten nicht in `Dictionary`/`Array`-Form durch

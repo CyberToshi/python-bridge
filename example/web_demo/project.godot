@@ -4,6 +4,7 @@
 ;
 ; Format:
 ;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
@@ -16,6 +17,7 @@ config/features=PackedStringArray("4.7")
 [autoload]
 
 PythonBridge="*res://addons/python_bridge/core/python_bridge.gd"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/python_bridge/plugin.cfg")

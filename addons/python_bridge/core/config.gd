@@ -22,7 +22,7 @@ const DEFAULT_INSTANCE: String = "default"
 ## literal contains e.g. PackedStringArray() or arithmetic would fail there.
 ## Building the dictionary at runtime is equally fast and avoids that trap.
 static func defaults() -> Dictionary:
-	return {
+	var out: Dictionary = {
 		# --- General -----------------------------------------------------------
 		"autostart": false,
 		"workspace_dir": DEFAULT_WORKSPACE_DIR,
@@ -82,8 +82,10 @@ static func defaults() -> Dictionary:
 		# Workspace-Bundle (tar, vom Build erzeugt) fuer das virtuelle
 		# Dateisystem: python/, modules/, plugins/ usw.
 		"web_bundle_url": "bridge_workspace.tar",
-		# Pyodide-Pakete (Komma-Liste), z. B. "numpy,scipy,pandas".
-		"web_packages": "numpy",
+		# Pyodide-Pakete (Komma-Liste). Verbindliches Wissenschaftsprofil:
+		# numpy, scipy, pandas werden vom Web-Transport geladen (Fehler, wenn
+		# sie nicht verfügbar sind - keine stille Verschlechterung).
+		"web_packages": "numpy,scipy,pandas",
 		"web_tag": "web",
 		# --- Connection / provisioning -------------------------------------------
 		"connect_timeout_ms": 20000,
@@ -104,6 +106,13 @@ static func defaults() -> Dictionary:
 		"auto_generate_wrappers": false,
 		"wrapper_dir": "res://python_bridge/wrappers",
 	}
+	# Web-Transport: der Pyodide-Worker laedt Runtime (CDN) + Wissenschafts-
+	# pakete, BEVOR er ready meldet - beim Kaltstart 10-60 s und damit weit
+	# ueber dem Desktop-WebSocket-Budget. 120 s decken den Kaltstart ab;
+	# echte Worker-Fehler kommen zusaetzlich als Error-Event an.
+	if OS.has_feature("web"):
+		out["connect_timeout_ms"] = 120000
+	return out
 
 ## Merges `cfg` over the defaults and coerces types. Unknown keys are kept
 ## (forward compatible) but not validated.

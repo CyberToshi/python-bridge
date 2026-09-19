@@ -142,7 +142,13 @@ Die Bridge konvertiert automatisch (siehe Typ-Mapping):
 | `list`                  | `Array`                  |
 | `dict`                  | `Dictionary`             |
 | `bytes`                 | `PackedByteArray` (Binary Frame) |
-| Objekt (nicht JSON-fähig) | String (repr-Fallback) |
+| `numpy.ndarray`         | `PackedFloat32Array`/`PackedInt32Array`/... |
+| `datetime`/`date`/`time`| `String` (ISO 8601)       |
+| `Decimal`               | `String` (exakte Dezimaldarstellung) |
+| `UUID`                  | `String`                  |
+| `pathlib.Path`          | `String` (Pfad)           |
+| `enum.Enum`             | Wert des Members (z. B. `String`/`int`) |
+| Objekt (nicht JSON-fähig) | String (repr-Fallback)  |
 
 ---
 

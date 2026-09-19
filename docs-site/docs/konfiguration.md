@@ -44,6 +44,24 @@ Aktuelle Werte liest du mit `PythonBridge.config()` (Kopie).
 | `dependencies` | `[]` | Zusätzliche Pakete, die in die venv installiert werden (zusätzlich zu `websockets`). Beispiel: `["numpy"]`. |
 | `autostart` | `false` | Wenn `true`, startet die Instanz `default` automatisch, sobald der Autoload im Baum ist. Für kontrollierte Projekte lieber `false` lassen und explizit starten. |
 
+:::note Abhängigkeiten direkt im Skript deklarieren (seit v0.3.1)
+Statt (oder zusätzlich zu) `dependencies` kann jede Python-Datei ihre Pakete
+selbst deklarieren – die Bridge liest die Deklaration beim ersten Aufruf und
+installiert Fehlendes automatisch in die venv:
+
+```python
+import numpy as np            # Importe immer oben in die Datei
+
+__bridge_deps__ = ["numpy", "scipy"]
+```
+
+Skript-Deps und `dependencies` werden zusammengeführt. Ist ein Paket nicht
+installierbar (z. B. ohne Netz), schlägt der Aufruf mit einer klaren
+`DEPENDENCY_ERROR`-Meldung ab, statt mit `ModuleNotFoundError` zur Laufzeit
+zu scheitern. Im Web-Build landen deklarierte Pakete automatisch im
+Bundle (siehe [Python im Browser](./web-runtime)).
+:::
+
 ### Tasks, Queue & Timeouts
 
 | Schlüssel | Default | Bedeutung |

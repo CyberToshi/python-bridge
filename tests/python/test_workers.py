@@ -108,14 +108,18 @@ class CooperativeCancelTest(unittest.TestCase):
                          "checkpoint must abort with status=cancelled")
         self.assertEqual(body["error"]["type"], "CancelledError")
 
-    def test_cancel_requested_consumed_once(self):
+    def test_cancel_requested_is_sticky(self):
+        # Das Flag bleibt fuer die Laufzeit des Jobs bestehen: Muster wie
+        # `while not cancel_requested()` oder `if cancel_requested():
+        # checkpoint()` bleiben sonst nach dem ersten Lesen blind. Erst
+        # consume_cancelled() beim Job-Start raeumt das Set auf.
         _ = executor._local
         executor._local.job_id = "j1"
         try:
             self.host.mark_cancelled("j1")
             self.assertTrue(self.host.cancel_requested_for_current())
-            self.assertFalse(self.host.cancel_requested_for_current(),
-                             "request is consumed once")
+            self.assertTrue(self.host.cancel_requested_for_current(),
+                            "flag is sticky within the same job")
         finally:
             executor._local.job_id = None
 

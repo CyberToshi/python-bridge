@@ -67,7 +67,7 @@ serializer = _load_module("serializer")
 # 'websockets', das im Browser nicht existiert. Ueberall sonst bleibt
 # `from python_bridge import server` unverändert nutzbar.
 
-VERSION = "0.3.0"
+VERSION = "0.3.2"
 
 __all__ = [
     "browser_host",
@@ -140,31 +140,48 @@ class _LazyPackage(type(_sys)):
                 _SUBS[name] = mod
             return mod
         if name in {"read_region", "write_region"}:
-            return globals()[name]
+            return self.__dict__[name]
         raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
 
     def __dir__(self):
         return list(globals().keys()) + list(__all__)
 
 
+# Module-weites Singleton-Backend: die Handle-Verwaltung (_opened/_keepalive/
+# _views) lebt pro Backend-Instanz. Ein neues Objekt pro Call wuerde die
+# Verwaltung wegwerfen; ein Singleton erhaelt sie.
+_SHARED_BACKEND = None
+
+
+def _shared_backend() -> SharedMemoryBackend:
+    global _SHARED_BACKEND
+    if _SHARED_BACKEND is None:
+        _SHARED_BACKEND = SharedMemoryBackend(owner="convenience")
+    return _SHARED_BACKEND
+
+
 def read_region(descriptor: RegionDescriptor, offset: int = 0, size: int = None):
     """Read raw bytes from an existing shared region by descriptor.
 
-    This is a convenience around the current IPC backend and requires that the
-    region already exists in the OS shared-memory backend. It does not create,
-    attach, or release the region; it only reads from the existing shared buffer.
+    Convenience around the current IPC backend; requires that the region
+    already exists in the OS shared-memory backend. It does not create,
+    attach, or release the region; it only reads from the existing buffer.
     """
-    return backend().read(SharedMemoryBackend().open(descriptor.id), offset, size or descriptor.size)
+    b = _shared_backend()
+    handle = b.open(descriptor.id)
+    return b.read(handle, offset, size or descriptor.size)
 
 
 def write_region(descriptor: RegionDescriptor, offset: int, raw: bytes):
     """Write raw bytes into an existing shared region by descriptor.
 
-    This is a convenience around the current IPC backend and requires that the
-    region already exists in the OS shared-memory backend. It does not create,
-    attach, or release the region; it only writes to the existing shared buffer.
+    Convenience around the current IPC backend; requires that the region
+    already exists in the OS shared-memory backend. It does not create,
+    attach, or release the region; it only writes to the existing buffer.
     """
-    return backend().write(SharedMemoryBackend().open(descriptor.id), offset, raw)
+    b = _shared_backend()
+    handle = b.open(descriptor.id)
+    return b.write(handle, offset, raw)
 
 
 _lazy = _LazyPackage(__name__, __doc__)

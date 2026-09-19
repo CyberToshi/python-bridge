@@ -23,7 +23,6 @@ const sidebars = {
     'godot-verification',
     'architecture',
     'hochleistungspfade',
-    'high-performance-paths',
     'fehlerbehebung',
   ],
 };

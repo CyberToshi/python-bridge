@@ -64,6 +64,24 @@ FFT, Matrixmultiplikation, numerische Integration/Optimierung, GroupBy/Merge).
 | Windows/Linux | Python-Prozess + lokaler WebSocket | implementiert |
 | Web | Pyodide im Web Worker + virtuelles FS | implementiert, funktional getestet |
 
+## Dependencies im Python-Code
+
+Jedes Skript deklariert selbst, was es braucht (erste Zeile):
+
+```python
+__bridge_deps__ = ["numpy", "pandas>=2.0"]
+```
+
+- **Desktop:** Provisioner installiert die deklarierten Pakete automatisch
+  in die venv; fehlt ein Paket später, installiert der Server nach bzw.
+  startet die Instanz einmal neu. Fehlt es dauerhaft, kommt ein klarer
+  `DEPENDENCY_ERROR` statt eines NameError mitten im Aufruf.
+- **Web:** `build_web_bundle.py` schreibt die Deklarationen in
+  `bridge_deps.json`; der Worker lädt sie vor der ersten Message über das
+  Pyodide-Paket-Repository (wie `web_packages` auch).
+- Alternativ/additiv: `PythonBridge.register_dependencies(["numpy"])` aus
+  GDScript oder `python_bridge/config/dependencies.txt`.
+
 ## Bewusste Grenzen (Browser)
 
 - kein `OS.create_process()`, keine lokalen TCP-Sockets, kein venv

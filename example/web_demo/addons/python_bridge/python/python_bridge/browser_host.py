@@ -43,7 +43,7 @@ from . import protocol, executor, introspection
 from .data_registry import DataStore
 from .serializer import encode_obj
 
-VERSION = "0.2.0-web.1"
+VERSION = "0.3.2-web"
 PLATFORM = "web"
 
 
@@ -52,6 +52,61 @@ def _task_error_body(msg_id, code, message, ms=0):
         protocol.MSG_TASK_ERROR, msg_id, "error",
         error={"code": code, "type": code, "message": message, "traceback": ""},
         ms=ms)
+
+
+def _web_deps_from_message(message):
+    """Alle per ``__bridge_deps__`` deklarierten Pakete einer Task-/Batch-
+    Message. Bevorzugt das deps-Meta des Clients; fehlt es, werden die
+    Deklarationen direkt aus dem Source gelesen (Introspection, ohne
+    Ausfuehrung) - so greift der Web-Hinweis auch ohne Client-Meta."""
+    if not isinstance(message, dict):
+        return []
+    deps = []
+
+    def _add_spec(spec):
+        s = str(spec).strip()
+        if s and s not in deps:
+            deps.append(s)
+
+    meta = message.get("deps")
+    if isinstance(meta, list):
+        for d in meta:
+            _add_spec(d)
+    source = str(message.get("source", "") or "")
+    if not deps and source:
+        for d in introspection.deps_from_source(source):
+            _add_spec(d)
+    for item in (message.get(protocol.FIELD_ITEMS) or []):
+        if not isinstance(item, dict):
+            continue
+        item_meta = item.get("deps")
+        if isinstance(item_meta, list):
+            for d in item_meta:
+                _add_spec(d)
+        elif not deps:
+            item_src = str(item.get("source", "") or "")
+            for d in introspection.deps_from_source(item_src):
+                _add_spec(d)
+    return deps
+
+
+def _ensure_web_script_dependencies(host, message):
+    """Web-Check vor der Ausfuehrung: deklarierte, aber nicht geladene Pakete
+    erzeugen einen strukturierten DependencyError. Liefert (ok, Meldung).
+    (Das eigentliche Laden macht der JS-Worker mit pyodide.loadPackage,
+    bevor der Host Nachrichten entgegennimmt.)"""
+    declared = _web_deps_from_message(message)
+    if not declared:
+        return True, ""
+    missing = [d for d in declared
+               if not executor._dependency_available(d, host.installed_dependencies)]
+    if not missing:
+        return True, ""
+    return False, (
+        "Script requires packages not loaded in the web runtime: %s. "
+        "Rebuild the web bundle with build_web_bundle.py --packages ... "
+        "(or extend web_packages)."
+        % ", ".join(missing))
 
 
 class BrowserHost:
@@ -198,6 +253,27 @@ class BrowserHost:
     def _handle_job(self, message, msg_id):
         # Single-threaded: context locks are unnecessary here, ScriptHost's
         # per-job bookkeeping (thread-local) works fine without threads.
+        # Script-declared dependencies (``__bridge_deps__ = [...]``): on web
+        # they must already be loaded (Pyodide loadPackage is asynchronous and
+        # runs in the JS worker BEFORE messages arrive). A still-missing
+        # package becomes a structured DEPENDENCY_ERROR - never a silent
+        # NameError deep inside user code.
+        deps_ok, deps_error = _ensure_web_script_dependencies(self.host, message)
+        if not deps_ok:
+            err = {"code": protocol.CATEGORY_DEPENDENCY_ERROR,
+                   "type": "DependencyError", "message": deps_error,
+                   "traceback": ""}
+            if message.get("type") == protocol.MSG_BATCH:
+                head = {"v": protocol.PROTOCOL_VERSION,
+                        "type": protocol.MSG_BATCH_RESULT,
+                        "id": msg_id,
+                        "items": [{"id": str(i.get("id", "")), "status": "error",
+                                   "error": err}
+                                  for i in message.get(protocol.FIELD_ITEMS, [])]}
+                return self._frames(head, [])
+            head = protocol.build_response(
+                protocol.MSG_TASK_ERROR, msg_id, "error", error=err, ms=0)
+            return self._frames(head, [])
         if message.get("type") == protocol.MSG_BATCH:
             chunks = []
             out_items = []
@@ -351,6 +427,29 @@ def js_init(caps_json="{}", workspace_root="/workspace", tag="web"):
     caps = json.loads(caps_json) if isinstance(caps_json, str) else (caps_json or {})
     _HOST = BrowserHost(caps, workspace_root=workspace_root, tag=tag)
     return json.dumps(_HOST.bootstrap())
+
+
+def js_status_json():
+    """Bootstrap-Status als JSON (ruft bootstrap() idempotent erneut auf).
+    Der Worker liest ihn nach dem Paketladen fuer Ready-Log/-Message."""
+    if _HOST is None:
+        return json.dumps({"platform": PLATFORM, "version": VERSION,
+                           "python": "", "workspace": ""})
+    return json.dumps(_HOST.bootstrap())
+
+
+def js_register_packages(names):
+    """Meldet dem Host Packages als geladen (vom JS-Worker nach jedem
+    erfolgreichen pyodide.loadPackage, BEVOR ready gemeldet wird). Die
+    Skript-Dependency-Pruefung akzeptiert diese Namen ohne erneute
+    find_spec-Probe."""
+    if _HOST is None or not isinstance(names, (list, tuple)):
+        return "ignored"
+    for name in names:
+        n = str(name).strip().lower()
+        if n and n not in _HOST.host.installed_dependencies:
+            _HOST.host.installed_dependencies.append(n)
+    return "ok"
 
 
 def js_dispatch(raw_b64="", raw_text=""):

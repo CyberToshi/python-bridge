@@ -18,12 +18,14 @@ erfasst und in der Antwort zurückgegeben.
 """
 
 import hashlib
+import importlib.util
 import io
+import re
 import threading
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 
-from . import protocol
+from . import introspection, protocol
 
 SYNTAX_FILENAME_PREFIX = "<bridge:"
 
@@ -147,13 +149,13 @@ class _CappedWriter(io.TextIOBase):
         text = str(s)
         if self._written >= self._limit:
             self.overflowed = True
-            return len(text)
+            return 0  # korrekt: NICHTS wurde uebernommen
         room = self._limit - self._written
         if len(text) > room:
             self._buf.write(text[:room])
             self._written += room
             self.overflowed = True
-            return len(text)
+            return room  # nur die tatsaechlich uebernommenen Zeichen
         self._buf.write(text)
         self._written += len(text)
         return len(text)
@@ -171,18 +173,36 @@ class ScriptContext:
     `code`        - kompiliertes Code-Objekt des zuletzt definierten Sources
                     (Compile-Cache: run() fuehrt es erneut aus statt neu zu
                     kompilieren - A4)
+    `declared_deps` - Pakete, die das Skript per ``__bridge_deps__ = [...]``
+                    deklariert hat (None = noch nie kompiliert).
     """
 
-    __slots__ = ("namespace", "source_hash", "code")
+    __slots__ = ("namespace", "source_hash", "code", "declared_deps")
 
     def __init__(self):
         self.namespace = {"__name__": "__pybridge__", "input": None}
         self.source_hash = None
         self.code = None
+        self.declared_deps = None
 
 
 def _hash(source):
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _dependency_available(spec, installed=()):
+    """True, wenn `spec` (Requirement-String wie "numpy>=1.20") im aktuellen
+    Interpreter importierbar ist. `installed` ist ein optionaler Satz bereits
+    verifizierter Distributionsnamen (aus dem Provisioner)."""
+    name = re.split(r"[<>=!~\[;,]", str(spec), 1)[0].strip().lower()
+    if not name:
+        return True
+    if name in installed:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, AttributeError):  # noqa: BLE001
+        return False
 
 
 def _error(exc_type, exc, code=protocol.CATEGORY_PYTHON_EXCEPTION):
@@ -203,6 +223,11 @@ class ScriptHost:
     def __init__(self, max_stdout_bytes=DEFAULT_MAX_STDOUT_BYTES,
                  max_stderr_bytes=DEFAULT_MAX_STDERR_BYTES):
         self.contexts = {}
+        # Bereits verfuegbare Pakete (kleingeschriebene Distributionsnamen).
+        # Der Godot-Provisioner traegt hier nach dem pip-Lauf ein, was die
+        # venv tatsaechlich enthaelt; ohne Eintrag faellt die Pruefung auf
+        # importlib.util.find_spec() zurueck.
+        self.installed_dependencies = []
         self.max_stdout_bytes = max_stdout_bytes
         self.max_stderr_bytes = max_stderr_bytes
         # Task-Ids, die der Client zu cancellen gebeten hat. Wird am Job-
@@ -277,6 +302,23 @@ class ScriptHost:
         code, err = self._compile(context_id, source)
         if err is not None:
             return None, err
+        # Skript-Dependencies (__bridge_deps__ = [...]) pruefen, BEVOR der
+        # Code laeuft: fehlt ein Paket, entsteht ein strukturierter
+        # DEPENDENCY_ERROR statt eines spaeteren NameError/ImportError.
+        deps = introspection.deps_from_source(source)
+        if deps:
+            ctx.declared_deps = deps
+            missing = [d for d in deps if not _dependency_available(d, self.installed_dependencies)]
+            if missing:
+                return None, _error(
+                    "DependencyError",
+                    "Script '%s' requires missing packages: %s. Add them to "
+                    "python_bridge/config/dependencies.txt (or configure "
+                    "'dependencies') and restart the instance."
+                    % (context_id, ", ".join(missing)),
+                    code=protocol.CATEGORY_DEPENDENCY_ERROR)
+        else:
+            ctx.declared_deps = []
         ctx.code = code
         ctx.source_hash = actual
         return code, None
@@ -458,13 +500,18 @@ class ScriptHost:
 
     def cancel_requested_for_current(self):
         """Kooperative Cancellation: True, wenn fuer den im aktuellen Worker-
-        Thread laufenden Job ein CANCEL eingegangen ist (einmalig konsumiert)."""
+        Thread laufenden Job ein CANCEL eingegangen ist.
+
+        Das Flag wird hier bewusst NICHT konsumiert: Muster wie
+        `if cancel_requested(): checkpoint()` oder
+        `while not cancel_requested(): ...` bleiben sonst blind, sobald die
+        Bedingung einmal geprueft wurde. Aufgeraeumt wird beim Job-Start
+        (consume_cancelled) bzw. mit dem cancel-Set selbst."""
         jid = getattr(_local, "job_id", None)
         if jid is None:
             return False
         with self._cancel_lock:
             if jid in self.cancelled:
-                self.cancelled.discard(jid)
                 return True
         return False
 

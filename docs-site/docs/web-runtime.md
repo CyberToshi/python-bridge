@@ -45,6 +45,24 @@ Pyodide-Runtime — lokal gebündelt zuerst, CDN als Fallback. GitHub Pages,
 Cloudflare Pages oder jeder statische Webserver genügen (HTTPS, korrekter
 WASM-MIME-Type, CORS nur bei Cross-Origin).
 
+## Skript-Abhängigkeiten im Web-Build
+
+`__bridge_deps__`-Deklarationen aus den Skripten landen automatisch in der
+`bridge_deps.json` des Bundles und als Pyodide-Pakete im Worker — du musst
+sie nicht doppelt pflegen. Pakete, die **nicht** im Bundle stecken, führt die
+Bridge beim Aufruf nicht still aus, sondern meldet eine klare
+`DEPENDENCY_ERROR`-Meldung (kein `ModuleNotFoundError` zur Laufzeit).
+
+## Server-Hardening seit v0.3.2
+
+Auch der Web-Pfad profitiert von der Desktop-Hardening-Runde: Ergebnisse
+über `max_result_bytes` werden **vor** der Serialisierung abgelehnt (im
+WASM-Heap der wichtigste OOM-Schutz), beim Shutdown wartende Queue-Jobs
+bekommen geordnete `task_error`-Antworten statt einem Timeout, und
+Server-Fehler enden mit sauberem Exit-Code + sichtbarem Log (das
+Lifecycle-Logging schreibt auf fd 2 und bleibt so auch während laufender
+Tasks sichtbar).
+
 ## Wissenschafts-Stack
 
 NumPy, SciPy und Pandas sind **verbindlich unterstützt und funktional

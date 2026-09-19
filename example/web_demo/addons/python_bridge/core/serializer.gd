@@ -187,6 +187,18 @@ static func decode(v: Variant, chunks: Array) -> Variant:
 				return PackedFloat64Array(Array(v["v"]))
 			"ndarray":
 				return _decode_ndarray(v, chunks)
+			"dt":
+				return str(v.get("iso", ""))
+			"dec":
+				return str(v.get("s", "0"))
+			"uuid":
+				return str(v.get("s", ""))
+			"path":
+				return str(v.get("s", "."))
+			"enum":
+				if v.has("value"):
+					return decode(v["value"], chunks)
+				return null
 			"image":
 				return _decode_image(v, chunks)
 			"pyobject":

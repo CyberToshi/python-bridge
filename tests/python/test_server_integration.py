@@ -23,6 +23,17 @@ sys.path.insert(0, PY_DIR)
 from python_bridge import protocol  # noqa: E402
 
 
+def _optional_import(name):
+    try:
+        return __import__(name)
+    except ImportError:
+        return None
+
+
+SCIPY = _optional_import("scipy")
+PANDAS = _optional_import("pandas")
+
+
 def _start_server(tmpdir, tag="test", extra=()):
     proc = subprocess.Popen(
         [sys.executable, os.path.join(PY_DIR, "run_server.py"),
@@ -731,6 +742,8 @@ class ServerIntegrationTest(unittest.TestCase):
                 "    return bool(np.allclose(x, [2.0, 3.0])) and fft_ok and mat_ok",
             ]), "verify", "sci-np")
 
+    @unittest.skipUnless(SCIPY is not None,
+                         "scipy ist in dieser Testumgebung nicht installiert")
     def test_scipy_functional_desktop(self):
         self._verify_science(
             "\n".join([
@@ -741,6 +754,8 @@ class ServerIntegrationTest(unittest.TestCase):
                 "    return bool(abs(val - 9.0) < 1e-6 and abs(res.x - 2.0) < 1e-3)",
             ]), "verify", "sci-sp")
 
+    @unittest.skipUnless(PANDAS is not None,
+                         "pandas ist in dieser Testumgebung nicht installiert")
     def test_pandas_functional_desktop(self):
         self._verify_science(
             "\n".join([

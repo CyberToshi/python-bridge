@@ -22,17 +22,23 @@ from typing import Any, Dict, Optional
 
 
 def backend_name() -> str:
-    """Name of the best available local backend for this platform/runtime."""
-    system = platform.system()
-    if system == "Linux" and _has_multiprocessing_shm():
+    """Name of the best available local backend for this platform/runtime.
+
+    multiprocessing.shared_memory basiert auf POSIX-Shm (Linux/macOS) bzw.
+    CreateFileMapping (Windows) und funktioniert plattformuebergreifend.
+    Die fruehere Linux-Beschraenkung war unnötig; praktische Unterschiede:
+    auf Windows ueberlebt eine Region den Owner-Crash bis zumunlinking
+    anders als unter POSIX - orphan cleanup (force_region_clean) deckt
+    beide Faelle ab.
+    """
+    if _has_multiprocessing_shm():
         return "multiprocessing_shared_memory"
     return "not_available"
 
 
 def backend() -> Optional[Any]:
     """Best available backend object or None."""
-    system = platform.system()
-    if system == "Linux" and _has_multiprocessing_shm():
+    if _has_multiprocessing_shm():
         import multiprocessing.shared_memory as _shm
 
         return _shm

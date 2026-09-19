@@ -521,6 +521,11 @@ func _build_task_msg(task: PythonBridgeTask, instance_id: String) -> Dictionary:
 	}
 	msg["source"] = task.source if _needs_source(task, instance_id) else ""
 	task._source_sent = msg["source"] != ""
+	# Skript-Deklarierte Abhängigkeiten (__bridge_deps__ = [...]): der Server
+	# installiert fehlende Pakete vor dem Aufruf in die venv.
+	var _deps := PythonBridgeDependencyManager.deps_from_source(task.source)
+	if not _deps.is_empty():
+		msg["deps"] = _deps
 	msg["data"] = _task_data(task)
 	return msg
 
@@ -544,6 +549,10 @@ func _task_item(task: PythonBridgeTask, instance_id: String, seen: Dictionary = 
 		else:
 			seen[key] = true
 	item["source"] = task.source if needs_source else ""
+	# Auch Batch-Items tragen ihre Deklarationen (der Server prüft pro Item).
+	var _deps := PythonBridgeDependencyManager.deps_from_source(task.source)
+	if not _deps.is_empty():
+		item["deps"] = _deps
 	task._source_sent = needs_source
 	item["data"] = _task_data(task)
 	return item

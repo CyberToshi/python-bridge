@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Python Bridge – Schritt-für-Schritt-Anleitung</title>
+<style>
+  @page { size: A4; margin: 2cm; }
+  body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 10.5pt; color: #1a1a1a; line-height: 1.45; }
+  h1 { font-size: 19pt; color: #1d4ed8; page-break-before: always; margin-top: 24pt; }
+  h1.first { page-break-before: avoid; }
+  h2 { font-size: 13.5pt; color: #0f2a66; margin-top: 14pt; }
+  h3 { font-size: 11.5pt; color: #333; margin-top: 10pt; }
+  pre { font-family: "Liberation Mono", "Courier New", monospace; font-size: 9pt; background-color: #f3f4f6; border: 1px solid #d1d5db; padding: 8px; }
+  code { font-family: "Liberation Mono", "Courier New", monospace; font-size: 9.5pt; background-color: #eef1f5; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.5pt; }
+  th, td { border: 1px solid #9ca3af; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background-color: #e5e7eb; }
+  .note { background-color: #fef9c3; border: 1px solid #eab308; padding: 6px 8px; }
+  .ok { background-color: #dcfce7; border: 1px solid #22c55e; padding: 6px 8px; }
+  .warn { background-color: #fee2e2; border: 1px solid #ef4444; padding: 6px 8px; }
+  .step { color: #1d4ed8; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1 class="first">Python Bridge – Schritt-für-Schritt-Anleitung</h1>
+<p><b>Version:</b> 0.3.0 &nbsp;|&nbsp; <b>Plattformen:</b> Windows, Linux, Web (Pyodide) &nbsp;|&nbsp; <b>Godot:</b> 4.x (entwickelt und getestet gegen 4.7)</p>
+<p>Diese Anleitung zeigt den kompletten Weg: Plugin installieren → Python-Dateien im mitgelieferten <b>Python-Editor-Dock</b> schreiben → GDScript-Code verbinden → Export auf <b>Linux</b>, <b>Windows</b> und <b>Web</b> testen.</p>
+
+<h2>Das Wichtigste in einem Satz</h2>
+<p>Python-Dateien leben im Projekt unter <code>python_bridge/scripts/</code>. Die Bridge startet automatisch einen Python-Prozess (Desktop) bzw. eine Pyodide-Runtime (Web) und stellt dieselbe GDScript-API für beide Wege bereit. Dein Spielcode und dein Python-Code unterscheiden nicht zwischen den Plattformen.</p>
+
+<h1>1. Installation und Einrichtung</h1>
+
+<h2>Schritt 1.1 – Plugin installieren</h2>
+<ol>
+  <li>ZIP (<code>PythonBridge-Plugin-0.3.0.zip</code>) entpacken.</li>
+  <li>Den Ordner <code>addons/python_bridge/</code> komplett in dein Godot-Projekt kopieren, sodass <code>res://addons/python_bridge/</code> entsteht.</li>
+  <li>Godot (neu) starten bzw. das Projekt öffnen.</li>
+</ol>
+
+<h2>Schritt 1.2 – Plugin aktivieren</h2>
+<ol>
+  <li><b>Projekt → Projekteinstellungen → Plugins</b>.</li>
+  <li>Haken bei <b>Python Bridge</b> setzen.</li>
+</ol>
+<p>Das Plugin macht automatisch zwei Dinge:</p>
+<ul>
+  <li>Registriert den Autoload-Singleton <b>PythonBridge</b> (alle API-Aufrufe laufen über dieses Objekt).</li>
+  <li>Öffnet das Dock <b>„Python Bridge“</b> (rechts oben) – dein Python-Datei-Editor mit Syntax-Highlighting.</li>
+</ul>
+
+<h2>Schritt 1.3 – Python prüfen (nur Desktop relevant)</h2>
+<p>Die Bridge braucht ein lokales Python 3.8+ (empfohlen: 3.10–3.12). Sie erkennt <code>python3</code> / <code>python</code> (Linux) bzw. <code>python.exe</code> / <code>py</code> (Windows) automatisch.</p>
+<pre>python3 --version      # Linux
+python --version       # Windows</pre>
+<p class="note"><b>Keine manuelle venv nötig:</b> Beim ersten <code>start_instance()</code> erzeugt die Bridge automatisch den Workspace (<code>python_bridge/scripts|modules|plugins|packages|tmp</code>) und eine virtuelle Umgebung mit allen Abhängigkeiten. Der Log im Dock zeigt den Fortschritt (<code>[PROV]</code>-Zeilen); die erste Einrichtung dauert daher kurz.</p>
+
+<h2>Schritt 1.4 – Projekt frühzeitig prüfen (Export-Check)</h2>
+<pre># im Projektordner ausführen:
+python3 addons/python_bridge/tools/export_check.py --project . --platform linux
+python3 addons/python_bridge/tools/export_check.py --project . --platform windows
+python3 addons/python_bridge/tools/export_check.py --project . --platform web</pre>
+<p>Der Check meldet fehlende Konfiguration <b>bevor</b> du exportierst (Runtime, Versionen, Schreibrechte, Web-Bundle, Presets). Mit <code>--json</code> für CI, <code>--fix</code> für sichere automatische Korrekturen.</p>
+
+<h1>2. Python-Dateien im Python-Editor schreiben</h1>
+
+<h2>Schritt 2.1 – Erstes Skript anlegen</h2>
+<ol>
+  <li>Dock <b>„Python Bridge“</b> öffnen.</li>
+  <li><b>New script</b> klicken, als ID <code>math_tools</code> eingeben.</li>
+  <li>Es wird <code>python_bridge/scripts/math_tools.py</code> angelegt und als Tab geöffnet.</li>
+</ol>
+
+<h2>Schritt 2.2 – Funktionen schreiben</h2>
+<p>Beispielinhalt (zwei Funktionen für die späteren Aufrufe):</p>
+<pre>def calculate(a, b):
+    """Addiert zwei Zahlen."""
+    return a + b
+
+
+def summarize(values):
+    """Summiert eine Liste von Zahlen."""
+    return sum(values)</pre>
+<p>Der Editor bietet: mehrere Tabs, Dirty-Marker (<code>*</code> vor dem Namen), Zeilennummern, Python-Syntax-Highlighting, externen-Änderungen-Watcher (lädt nicht-dirty Tabs automatisch neu) und Hot-Reload-Button.</p>
+
+<h2>Schritt 2.3 – Speichern und testen</h2>
+<ol>
+  <li><b>Save</b> klicken – schreibt die Datei (Registry-Cache wird automatisch verworfen).</li>
+  <li><b>Run</b> klicken – führt das Skript über <code>execute_script()</code> aus. Beim ersten Mal startet die Python-Instanz <code>default</code> automatisch (venv-Erstellung, siehe Log).</li>
+  <li>Ergebnisse und Fehler (inkl. Python-Traceback) erscheinen im Logbereich des Docks.</li>
+</ol>
+<p class="ok"><b>Tipp:</b> Ein Skript, das mit <b>Run</b> getestet werden kann, darf eine Variable <code>result</code> setzen: <code>result = calculate(2, 3)</code>. Das Ergebnis erscheint im Log.</p>
+
+<h2>Schritt 2.4 – Wrapper generieren (optional, empfohlen)</h2>
+<ol>
+  <li>Skript-Tab aktiv lassen, <b>Generate wrapper</b> klicken.</li>
+  <li>Es entsteht <code>python_bridge/wrappers/MathToolsWrapper.gd</code> mit einer typisierten GDScript-Methode pro Python-Funktion (Signaturen kommen aus der AST-Introspection).</li>
+</ol>
+<p>Generierte Dateien tragen einen Marker und werden nur als generierte Dateien überschrieben – eigene Wrappers bleiben sicher.</p>
+
+<h1>3. GDScript: die Bridge im Spiel verwenden</h1>
+
+<h2>Schritt 3.1 – Minimalbeispiel</h2>
+<p>Neues Skript an einen Node hängen (z.&nbsp;B. <code>Main.gd</code>):</p>
+<pre>extends Node
+
+func _ready() -&gt; void:
+    # Instanz starten (Desktop: Python-Prozess, Web: Pyodide) – identischer Code!
+    var start = await PythonBridge.start_instance()
+    if start.is_error():
+        push_error("Bridge-Start fehlgeschlagen: " + start.error_message())
+        return
+
+    # Skript-Funktion aufrufen
+    var r = await PythonBridge.call_script("math_tools", "calculate", [2, 3])
+    if r.is_ok():
+        print("2 + 3 = ", r.value)
+    else:
+        print("Fehler (%s): %s" % [r.error_code(), r.error_message()])
+        if r.error.has("traceback"):
+            print(r.error["traceback"])</pre>
+
+<h2>Schritt 3.2 – API-Überblick</h2>
+<table border="1">
+  <tr><th>Aufruf</th><th>Zweck</th></tr>
+  <tr><td><code>await start_instance(name)</code></td><td>Instanz starten (provisioniert venv/Workspace automatisch)</td></tr>
+  <tr><td><code>await execute(code, input)</code></td><td>Einmaliger Code, Ergebnis über Variable <code>result</code></td></tr>
+  <tr><td><code>await execute_script(id, input)</code></td><td>Gesamtes Skript ausführen</td></tr>
+  <tr><td><code>await call_script(id, func, args, kwargs)</code></td><td>Einzelne Funktion aufrufen (persistenter Kontext)</td></tr>
+  <tr><td><code>await define_script(id)</code></td><td>Skript dauerhaft in den Kontext definieren</td></tr>
+  <tr><td><code>create_script(id, code)</code></td><td>Python-Datei schreiben (nutzt auch das Dock)</td></tr>
+  <tr><td><code>hot_reload_script(id)</code></td><td>Kontext invalidieren und neu laden</td></tr>
+  <tr><td><code>introspect_script(id)</code></td><td>Funktions-Signaturen abfragen (Basis für Wrapper)</td></tr>
+  <tr><td><code>submit_task / cancel_task / task_done</code></td><td>Task-API: Prioritäten, Batching, Timeout, Cancel</td></tr>
+  <tr><td><code>materialize_data / release_data</code></td><td>Große Ergebnisse (DataRef-Handles) nachladen/freigeben</td></tr>
+</table>
+
+<h2>Schritt 3.3 – Generierten Wrapper nutzen</h2>
+<pre># statt call_script(...) direkt typisiert:
+var math := PyBridgeMathTools.new()
+var r := await math.calculate(2, 3)</pre>
+
+<h2>Schritt 3.4 – Hot Reload im Alltag</h2>
+<ol>
+  <li>Python-Datei ändern (im Dock oder extern), <b>Save</b>.</li>
+  <li><b>Hot reload</b> klicken (oder automatisch: der Watcher erkennt Disk-Änderungen nicht-dirty Tabs).</li>
+  <li>Der nächste Aufruf nutzt den neuen Code; Godot-State bleibt unangetastet.</li>
+</ol>
+
+<h1>4. Parameter und Rückgabewerte</h1>
+<table border="1">
+  <tr><th>GDScript</th><th>Python</th><th>Hinweis</th></tr>
+  <tr><td><code>int</code>, <code>float</code>, <code>bool</code>, <code>String</code></td><td><code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code></td><td>1:1</td></tr>
+  <tr><td><code>Array</code>, <code>Dictionary</code></td><td><code>list</code>, <code>dict</code></td><td>JSON-kompatibel, beliebig verschachtelt</td></tr>
+  <tr><td><code>PackedByteArray</code></td><td><code>bytes</code></td><td>binär, effizient</td></tr>
+  <tr><td>typisierte Arrays / <code>Array</code></td><td>numpy-Array (klein)</td><td>wird automatisch dekodiert</td></tr>
+  <tr><td><code>PythonBridgeDataRef</code></td><td>numpy-Array (groß, ≥ <code>data_ref_threshold_bytes</code>)</td><td>Handle, Nachladen mit <code>materialize_data()</code></td></tr>
+</table>
+<p>Fehler sind immer strukturiert: <code>r.error</code> enthält <code>code</code> (Kategorie, z.&nbsp;B. <code>PYTHON_EXCEPTION</code>), <code>type</code> (Python-Exception-Typ), <code>message</code> und <code>traceback</code>.</p>
+
+<h1>5. Export-Test Linux</h1>
+<h2>Schritt 5.1 – Preset anlegen</h2>
+<p><b>Projekt → Export → Hinzufügen → Linux</b>.</p>
+<h2>Schritt 5.2 – Prüfen</h2>
+<pre>python3 addons/python_bridge/tools/export_check.py --project . --platform linux</pre>
+<p>Erwartet: 0 Fehler. Geprüft werden Python-Version (≥3.8), Schreibrechte für venv, Bridge-Dateien und Preset.</p>
+<h2>Schritt 5.3 – Exportieren und laufen lassen</h2>
+<ol>
+  <li>Exportieren.</li>
+  <li>Das Spiel braucht auf dem Zielsystem ein <b>installiertes Python 3</b> (die Bridge provisioniert venv + Abhängigkeiten beim ersten Start selbstständig im Nutzer-/Spielverzeichnis).</li>
+  <li>Erster Start: die <code>[PROV]</code>-Logzeilen zeigen die Einrichtung; danach verhält sich das Spiel wie im Editor.</li>
+</ol>
+
+<h1>6. Export-Test Windows</h1>
+<h2>Schritt 6.1 – Preset anlegen</h2>
+<p><b>Projekt → Export → Hinzufügen → Windows</b>.</p>
+<h2>Schritt 6.2 – Prüfen</h2>
+<pre>python3 addons/python_bridge/tools/export_check.py --project . --platform windows</pre>
+<p>Der Check auf dem Build-Rechner verifiziert Projekt-Layout und Preset. Die Runtime-Regeln gelten auf dem Windows-Zielsystem: Python 3 installiert (Microsoft Store oder python.org), Bridge findet <code>python.exe</code>/<code>py</code> automatisch; Workspace + venv werden beim ersten Start angelegt.</p>
+<h2>Schritt 6.3 – Exportieren und testen</h2>
+<p>Exportieren, <code>.exe</code> starten; im Zweifel zuerst <code>python --version</code> in der CMD des Zielsystems prüfen. Der Log im Spiel (bzw. Konsole) zeigt die Provisionierung.</p>
+
+<h1>7. Export-Test Web (wichtig)</h1>
+<p><b>Konzept:</b> Im Browser gibt es keine lokalen Prozesse, keine venv, keine TCP-Sockets. Die Bridge nutzt deshalb auf Web automatisch einen zweiten Transport: <b>Pyodide (Python als WebAssembly) läuft in einem Web Worker</b> mit virtuellem Dateisystem. Deine GDScript-Aufrufe und dein Python-Code bleiben <b>identisch</b> – die Bridge wählt den Transport selbst. NumPy, SciPy und Pandas sind verbindlich unterstützt und funktional getestet (echte Berechnungen: linalg, FFT, Matmul, Integration, GroupBy/Merge).</p>
+
+<h2>Schritt 7.1 – Web-Preset anlegen</h2>
+<p><b>Projekt → Export → Hinzufügen → Web</b>.</p>
+
+<h2>Schritt 7.2 – Web-Bundle bauen</h2>
+<pre># im Projektordner:
+python3 addons/python_bridge/tools/build_web_bundle.py \
+    --project . --out build/web_bridge --packages numpy,scipy,pandas</pre>
+<p>Ergebnis in <code>build/web_bridge/</code>:</p>
+<pre>bridge_worker.js        der Pyodide-Worker (aus dem Addon)
+bridge_workspace.tar    dein Python-Code + Bridge-Runtime (virtuelles FS)
+bridge-lock.json        aufgelöste Versionen (Reproduzierbarkeit)
+pyodide/                optional: lokale Runtime (offline-fähig)</pre>
+<p class="note"><b>Statisches Hosting:</b> Alles sind statische Dateien – GitHub Pages genügt. Ohne lokalen <code>pyodide/</code>-Ordner lädt der Worker die Runtime vom jsDelivr-CDN (Fallback). Mit <code>--local-pyodide &lt;entpacktes-pyodide&gt;</code> läuft alles CDN-frei von deinem Host.</p>
+
+<h2>Schritt 7.3 – Exportieren und zusammenlegen</h2>
+<ol>
+  <li>Web-Preset exportieren (Zielordner, z.&nbsp;B. <code>build/web/</code>).</li>
+  <li>Den <b>Inhalt</b> von <code>build/web_bridge/</code> <b>neben</b> die Export-Dateien kopieren (<code>index.html</code>, <code>*.wasm</code> usw.).</li>
+</ol>
+<p>Erwartetes Layout:</p>
+<pre>export-ordner/
+├── index.html
+├── godot.web.wasm  (+ .js/.pck)
+├── bridge_worker.js
+├── bridge_workspace.tar
+├── bridge-lock.json
+└── pyodide/            (optional)</pre>
+<p>Prüfen:</p>
+<pre>python3 addons/python_bridge/tools/export_check.py --project . --platform web</pre>
+
+<h2>Schritt 7.4 – Lokal testen</h2>
+<pre>cd export-ordner
+python3 -m http.server 8000
+# Browser: http://localhost:8000</pre>
+<p>Die Browser-Konsole zeigt: Pyodide-Load, Workspace-Entpacken, Pakete (numpy/scipy/pandas), <code>bridge host ready</code>, danach deine <code>[demo]</code>/<code>print</code>-Ausgaben. Falls Threads-Fehler auftreten, exportiere ohne „Thread Support“ oder setze die Header <code>COOP</code>/<code>COEP</code> (GitHub Pages unterstützt Custom-Header nicht – dann die Single-Thread-Variante nutzen; die Bridge funktioniert in beiden Fällen).</p>
+
+<h2>Schritt 7.5 – Was im Web anders ist (ehrliche Grenzen)</h2>
+<table border="1">
+  <tr><th>Thema</th><th>Desktop</th><th>Web</th></tr>
+  <tr><td>Python-Ausführung</td><td>echter Prozess, venv</td><td>Pyodide (WASM) im Web Worker</td></tr>
+  <tr><td>Dateien</td><td>echtes Dateisystem</td><td>virtuelles FS (MEMFS) aus <code>bridge_workspace.tar</code></td></tr>
+  <tr><td><code>subprocess</code>, <code>multiprocessing</code>, TCP</td><td>verfügbar</td><td>nicht verfügbar → strukturierter Fehler (keine stillen Ersatzwerte)</td></tr>
+  <tr><td>Blockierende Tasks</td><td>Timeout + Kill möglich</td><td>nur kooperatives Cancel (<code>__bridge__.checkpoint()</code>)</td></tr>
+  <tr><td>NumPy/SciPy/Pandas</td><td>pip/venv</td><td>Pyodide-Paket-Repository (lokal oder CDN), verbindlich getestet</td></tr>
+</table>
+
+<h1>8. Fehlerbehebung (kompakt)</h1>
+<table border="1">
+  <tr><th>Symptom</th><th>Ursache / Lösung</th></tr>
+  <tr><td><code>Script not found: X</code></td><td>ID entspricht nicht dem Dateinamen unter <code>python_bridge/scripts/</code>; Dock-Liste prüfen oder vollen Pfad übergeben.</td></tr>
+  <tr><td>Start dauert lange</td><td>Erste venv-Provisionierung; Log zeigt <code>[PROV]</code>-Fortschritt. Danach normal schnell.</td></tr>
+  <tr><td><code>not_ready</code> / <code>down</code></td><td>Python nicht gefunden: <code>python --version</code> prüfen oder <code>PythonBridge.configure({"python_executable": "..."})</code> setzen.</td></tr>
+  <tr><td>Web: Worker lädt nicht (404)</td><td><code>bridge_worker.js</code> muss page-relativ neben <code>index.html</code> liegen (Schritt 7.3).</td></tr>
+  <tr><td>Web: Paket-Ladefehler</td><td>CDN blockiert? Lokales <code>pyodide/</code>-Bundle bauen (Schritt 7.2, <code>--local-pyodide</code>).</td></tr>
+  <tr><td>Hot Reload greift nicht</td><td>Tab mit ungespeicherten Änderungen (Dirty-Marker) blockiert Disk-Neuladen absichtlich – erst Save.</td></tr>
+</table>
+
+<h1>9. Abschluss-Checkliste</h1>
+<ul>
+  <li>☐ Plugin aktiv, Dock „Python Bridge“ sichtbar</li>
+  <li>☐ Erstes Skript im Dock erstellt, <b>Save</b> + <b>Run</b> erfolgreich</li>
+  <li>☐ <code>start_instance()</code> + <code>call_script()</code> im GDScript getestet</li>
+  <li>☐ <code>export_check.py</code> für linux/windows/web mit 0 Fehlern</li>
+  <li>☐ Linux/Windows-Export: Python auf Zielsystem vorhanden, erster Start provisioniert</li>
+  <li>☐ Web: Bundle gebaut, neben Export kopiert, Konsole zeigt <code>bridge host ready</code></li>
+  <li>☐ NumPy/SciPy/Pandas-Call im Web getestet (falls genutzt)</li>
+</ul>
+
+<p class="ok"><b>Weitere Doku:</b> <code>docs/API.md</code> (vollständige API), <code>docs/ARCHITEKTUR.md</code> (Aufbau), <code>docs/EXPORT.md</code> (Export-Details), <code>docs/WEB_RUNTIME.md</code> (Pyodide-Integration), <code>docs/TROUBLESHOOTING.md</code> (Fehlerfälle).</p>
+
+</body>
+</html>

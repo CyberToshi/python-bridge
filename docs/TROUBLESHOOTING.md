@@ -57,9 +57,12 @@ verworfen. Bei wiederholten Timeouts: Timeout erhöhen oder Instanz mit
 `stop_instance()`/`start_instance()` neu starten.
 
 ### Werte kommen als String an („pyobject“-Fallback)
-Nicht serialisierbare Objekte werden als `repr`-String übertragen. Nur
-JSON-fähige Typen, `bytes`, `ndarray`, Listen/Dicts verwenden oder einen
-Custom-Type per `PythonBridgeTypeMapper.register()` ergänzen.
+Nicht serialisierbare Objekte werden als `repr`-String übertragen. Häufige
+Stdlib-Typen (`datetime`, `Decimal`, `UUID`, `Path`, `Enum`) werden seit
+0.3.1 strukturiert übertragen und landen auf Godot-Seite als String bzw.
+Enum-Wert. Für alles andere: Nur JSON-fähige Typen, `bytes`, `ndarray`,
+Listen/Dicts verwenden oder einen Custom-Type per
+`PythonBridgeTypeMapper.register()` ergänzen.
 
 ### „class_name PyBridgeX ist bereits vergeben“
 Der Wrapper-Generator prüft die globale Klassenliste und bricht sichtbar

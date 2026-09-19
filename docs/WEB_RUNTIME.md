@@ -56,7 +56,7 @@ Konfiguration (alle Keys in `core/config.gd`, per `configure_instance()`
 | `web_pyodide_dir` | `""` | lokale Pyodide-Runtime (offline-first); leer = CDN |
 | `web_cdn_url` | jsDelivr v0.26.4 | CDN-Fallback für Pyodide |
 | `web_bundle_url` | `bridge_workspace.tar` | virtuelles Dateisystem (Workspace-Bundle) |
-| `web_packages` | `numpy` | Pyodide-Pakete, die der Worker lädt (z. B. `numpy,scipy,pandas`) |
+| `web_packages` | `numpy,scipy,pandas` | Pyodide-Pakete, die der Worker lädt (verbindliches Wissenschaftsprofil) |
 | `web_tag` | `web` | Instanz-Tag |
 
 ## Build & Deployment (Static Hosting)
@@ -73,8 +73,22 @@ Der Builder erzeugt neben dem Godot-Web-Export:
 |---|---|
 | `bridge_worker.js` | der Pyodide-Worker (aus dem Addon kopiert) |
 | `bridge_workspace.tar` | Workspace für das virtuelle FS |
+| `bridge_deps.json` | `__bridge_deps__`-Deklarationen der Skripte (Worker lädt sie vor der ersten Message) |
 | `pyodide/` | optional: lokale Runtime (offline-first) |
 | `bridge-lock.json` | aufgelöste Versionen (reproduzierbar) |
+
+#### Dependencies im Python-Code (Web)
+
+Skripte deklarieren ihre Pakete selbst — der Worker lädt sie beim Start
+über das Pyodide-Paket-Repository, genau wie `web_packages`:
+
+```python
+__bridge_deps__ = ["numpy", "pandas>=2.0"]
+```
+
+Fehlt ein Paket im Bundle, meldet der Host vor der Ausführung einen
+strukturierten `DEPENDENCY_ERROR` (mit Rebuild-Hinweis) — es gibt kein pip
+im Browser und kein still schiefgehendes `import`.
 
 Strategie: **lokal gebündelt zuerst, CDN als Fallback**. Ohne `--local-pyodide`
 wird der jsDelivr-CDN benutzt; mit lokalem Pyodide läuft alles ohne Netz.

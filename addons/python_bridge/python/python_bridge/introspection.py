@@ -32,6 +32,7 @@ for wrapper purposes.
 """
 
 import ast
+import re
 
 
 def analyze(source):
@@ -40,7 +41,43 @@ def analyze(source):
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             functions.append(_function_schema(node))
-    return {"functions": functions}
+    return {"functions": functions, "dependencies": deps_from_source(source)}
+
+
+# one top-level assignment:  __bridge_deps__ = [...]
+_DEPS_ASSIGN_RE = re.compile(
+    r"^__bridge_deps__\s*=\s*\[[^\]]*\]", re.MULTILINE)
+
+
+def deps_from_source(source):
+    """Extracts the script dependency list from a top-level
+    ``__bridge_deps__ = ["numpy", "pandas>=2"]`` assignment.
+
+    A strict regex on the FIRST top-level assignment keeps this cheap and
+    robust for any syntax error elsewhere in the file (the executor parses
+    the real AST only when the list is present). Non-string entries are
+    ignored; the result keeps source order and never contains duplicates.
+    """
+    match = _DEPS_ASSIGN_RE.search(source or "")
+    if not match:
+        return []
+    try:
+        tree = ast.parse(match.group(0))
+    except SyntaxError:
+        return []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and \
+                any(isinstance(t, ast.Name) and t.id == "__bridge_deps__"
+                    for t in node.targets):
+            if isinstance(node.value, (ast.List, ast.Tuple)):
+                deps = []
+                for elt in node.value.elts:
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                        name = elt.value.strip()
+                        if name and name not in deps:
+                            deps.append(name)
+                return deps
+    return []
 
 
 def _function_schema(node):
@@ -56,21 +93,18 @@ def _function_schema(node):
             "annotation": _unparse(annotation),
         })
 
-    # Positional-only:  def f(a, b, /, c)
-    for i, a in enumerate(args.posonlyargs):
-        has_def = i >= len(args.posonlyargs) - len(args.defaults)
-        default = args.defaults[i - (len(args.posonlyargs) - len(args.defaults))] \
-            if has_def else None
-        add(a.arg, "posonly", has_def, default, a.annotation)
-
-    # Positional-or-keyword
+    # Positional params: posonlyargs + args bilden EINE Sequenz; defaults
+    # binden von HINTEN. Getrennte Indizierung verfälscht Defaults (z. B.
+    # def f(a, b, /, c=1, d=2) bekam a/b faelschlich c/d-Defaults).
+    all_pos = list(args.posonlyargs) + list(args.args)
     ndefaults = len(args.defaults)
-    npos = len(args.args)
-    start = npos - ndefaults if ndefaults > 0 else npos
-    for i, a in enumerate(args.args):
-        has_def = i >= start
-        default = args.defaults[i - start] if has_def else None
-        add(a.arg, "pos", has_def, default, a.annotation)
+    first_default = len(all_pos) - ndefaults
+    n_posonly = len(args.posonlyargs)
+    for i, a in enumerate(all_pos):
+        has_def = i >= first_default
+        default = args.defaults[i - first_default] if has_def else None
+        kind = "posonly" if i < n_posonly else "pos"
+        add(a.arg, kind, has_def, default, a.annotation)
 
     if args.vararg:
         add(args.vararg.arg, "var", annotation=args.vararg.annotation)

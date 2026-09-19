@@ -1,4 +1,4 @@
-# Python Bridge — API-Referenz (v0.2.0)
+# Python Bridge — API-Referenz (v0.3.1)
 
 Alle Funktionen sind Instanz-Methoden des Autoload-Singletons `PythonBridge`.
 Aufrufe, die Python ausführen, liefern ein `PythonBridgeResult`.
@@ -12,7 +12,31 @@ PythonBridge.configure({
     "workspace_dir": "res://python_bridge",   # wo scripts/ venv/ tmp/ liegen
     "python_executable": "",                  # leer = automatische Suche
     "dependencies": ["numpy"],                # zusätzlich zu websockets
-    "autostart": false,
+```
+
+### Dependencies deklarieren (drei gleichberechtigte Wege)
+
+1. **Im Python-Skript** (empfohlen, Single Source of Truth):
+
+   ```python
+   __bridge_deps__ = ["numpy", "pandas>=2.0"]   # erste Zeile
+   ```
+
+   Desktop: installiert der Provisioner automatisch in die venv; fehlt ein
+   Paket beim ersten Call, installiert der Server es nach (oder startet die
+   Instanz einmal neu). Web: `build_web_bundle.py` übernimmt die Deklaration
+   in `bridge_deps.json`, der Worker lädt die Pakete beim Start.
+
+2. **Aus GDScript** (vor `start_instance()`):
+
+   ```gdscript
+   PythonBridge.register_dependencies(["numpy", "scipy"])
+   ```
+
+3. **Datei** `python_bridge/config/dependencies.txt` (eine Zeile pro Paket,
+   `#`-Kommentare erlaubt).
+
+```gdscript    "autostart": false,
     # Task Manager / Backpressure
     "max_queued_tasks": 1000,
     "max_payload_bytes": 67108864,            # 64 MiB

@@ -28,6 +28,7 @@ var _script_registry: PythonBridgeScriptRegistry = null
 var _task_seq: int = 0
 var _context_seq: int = 0
 var _shutting_down: bool = false
+var _dep_restart_done: Dictionary = {}   # context|hash -> true (Einmal-Schutz)
 # Data-Plane (DataRef-Handles): laufende data_get/data_release-Anfragen und
 # die je Instanz bekannten Handles (fuer stale-Markierung beim Lifecycle).
 var _pending_data: Dictionary = {}
@@ -83,11 +84,32 @@ static func system() -> Node:
 # ------------------------------------------------------------------ Konfiguration
 func configure(cfg: Dictionary) -> void:
 	_settings = PythonBridgeConfig.normalize(cfg)
+	_apply_export_workspace_redirect()
 	if _task_manager == null:
 		return
 	# Tunables werden zur Laufzeit vom TaskManager/Scheduler gelesen.
 	_task_manager._cfg = _settings
 	_scheduler._cfg = _settings
+
+## Export-Lauf (Desktop/Web): res:// ist im PCK nicht schreibbar. Der
+## workspace_dir wird einmalig auf user://python_bridge umgeleitet, damit
+## ALLE Workspace-Zugriffe (create_script, hot reload, Dependency-Manager,
+## Provisioner) konsistent im schreibbaren Nutzerbereich arbeiten. Im
+## Editor bleibt res:// (echte Dateien). Die Inhalte werden in
+## _instance_settings() beim ersten Instanz-Start aus dem PCK geseedet.
+## Falls die Engine im Editor laeuft, res:// direkt beschreibbar ist und
+## kein Export vorliegt, bleibt alles im Editor unverändert (res://).
+## ACHTUNG: Der korrekte Export-Feature-Tag ist "template" - "export" ist
+## im exportierten Spiel NIE gesetzt (Godot-Doku), deshalb pruefen wir
+## "template". Im Export ist res:// ins PCK gepackt und NICHT schreibbar.
+func _apply_export_workspace_redirect() -> void:
+	if not OS.has_feature("template"):
+		return
+	var ws := str(_settings.get("workspace_dir", PythonBridgeConfig.DEFAULT_WORKSPACE_DIR))
+	if ws.begins_with("user://"):
+		return  # bereits umgeleitet (oder bewusst konfiguriert)
+	_settings["_export_source_workspace"] = ws
+	_settings["workspace_dir"] = "user://python_bridge"
 
 func workspace_dir() -> String:
 	return str(_settings.get("workspace_dir", PythonBridgeConfig.DEFAULT_WORKSPACE_DIR))
@@ -268,15 +290,77 @@ func _send_to_instance(instance: Object, msg: Dictionary) -> Error:
 
 func _instance_settings() -> Dictionary:
 	var s: Dictionary = _settings.duplicate(true)
-	s["workspace_fs"] = ProjectSettings.globalize_path(str(_settings.get("workspace_dir")))
+	var ws_dir := str(_settings.get("workspace_dir", PythonBridgeConfig.DEFAULT_WORKSPACE_DIR))
+	# Export-Lauf (Web/Desktop): res:// ist ins PCK gepackt und NICHT
+	# schreibbar. Der GESAMTE Workspace (venv, scripts, config, tmp) zieht
+	# in den schreibbaren Nutzerbereich (user://) und wird beim ersten
+	# Start einmalig aus dem PCK befuellt (Skripte, Konfiguration -
+	# vorhandene Dateien werden nie ueberschrieben). Im Editor bleibt
+	# alles unter res:// (echte Dateien, Hot Reload etc.).
+	var exported := OS.has_feature("template")
+	if exported:
+		ws_dir = "user://python_bridge"
+		s["workspace_dir"] = ws_dir
+	s["workspace_res"] = ws_dir
+	# Export: globalize_path(user://...) liefert die reale Adresse im
+	# Nutzerordner. Editor: globalize_path(res://...) die echte Adresse im
+	# Projekt. Beides ist fuer OS-Prozesse (venv-python + run_server.py)
+	# direkt nutzbar.
+	s["workspace_fs"] = ProjectSettings.globalize_path(ws_dir)
+	if exported:
+		# Workspace-Inhalte aus dem PCK seeden (config, scripts, modules,
+		# plugins, packages), damit Provisioner/Deps-Manager/Hot-Reload
+		# konsistent auf user:// arbeiten. Quelle ist die ORIGINAL-
+		# workspace_dir (res://python_bridge), nicht die umgeleitete.
+		_seed_export_workspace(str(_settings.get("_export_source_workspace",
+			"res://python_bridge")), s["workspace_fs"])
 	var script_path: String = get_script().resource_path
 	if script_path != "":
 		# Provisioner filesystem operations require an absolute path. The
 		# resource path is still useful for locating the add-on, but must be
 		# globalized before the Python runtime is copied into the workspace.
-		s["bridge_python_dir"] = ProjectSettings.globalize_path(
-			script_path.get_base_dir() + "/../python")
+		# AUSNAHME Export: dort gibt es fuer res:// keine reale Adresse
+		# (Inhalt liegt im PCK). DirAccess/FileAccess lesen PCK-Inhalte
+		# direkt, daher bleibt der res://-Pfad un-globalisiert und der
+		# Provisioner kopiert die Bridge-Runtime daraus in den user://-
+		# Workspace. Der RUNNER wird im Export real aus dem kopierten
+		# Workspace gestartet (ein OS-Prozess kann nicht aus dem PCK lesen).
+		var py_dir := script_path.get_base_dir() + "/../python"
+		s["bridge_python_dir"] = py_dir if exported else ProjectSettings.globalize_path(py_dir)
 	return s
+
+## Kopiert im Export-Lauf die Workspace-Inhalte aus dem PCK (res://) in
+## den schreibbaren user://-Workspace. Vorhandene Dateien werden NICHT
+## ueberschrieben (Nutzer-Aenderungen bleiben erhalten); Unterordner
+## werden rekursiv uebernommen.
+func _seed_export_workspace(from_res: String, to_fs: String) -> void:
+	for sub in ["config", "scripts", "modules", "plugins", "packages"]:
+		_seed_dir(from_res + "/" + sub, to_fs + "/" + sub)
+
+func _seed_dir(src_res: String, dst_fs: String) -> void:
+	var dir := DirAccess.open(src_res)
+	if dir == null:
+		return  # Ordner nicht im PCK (leeres Projekt) - ok
+	DirAccess.make_dir_recursive_absolute(dst_fs)
+	dir.list_dir_begin()
+	var entry := dir.get_next()
+	while entry != "":
+		if not entry.begins_with("."):
+			var src_full := src_res + "/" + entry
+			var dst_full := dst_fs + "/" + entry
+			if dir.current_is_dir():
+				_seed_dir(src_full, dst_full)
+			else:
+				if not FileAccess.file_exists(dst_full):
+					var src_f := FileAccess.open(src_full, FileAccess.READ)
+					if src_f:
+						var dst_f := FileAccess.open(dst_full, FileAccess.WRITE)
+						if dst_f:
+							dst_f.store_buffer(src_f.get_buffer(src_f.get_length()))
+							dst_f.close()
+						src_f.close()
+		entry = dir.get_next()
+	dir.list_dir_end()
 
 # ------------------------------------------------------------------ Task-API
 ## Erzeugt und submitted einen Task. Liefert sofort ein PythonBridgeResult:
@@ -368,6 +452,39 @@ func call_script(script_id: String, function: String, args: Array = [], kwargs: 
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
 			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
 			"Script not found: " + script_id))
+	# Auto-Restart: deklariert ein (neues) Skript Pakete, die in der venv
+	# noch fehlen, wird die Instanz EINMAL neu gestartet (der Provisioner
+	# installiert sie beim Start). Pro Skript-Version nur ein Versuch -
+	# ein NameError durch einen Tippfehler loest keine Restart-Schleife aus.
+	var result := await _call_script_inner(script_id, function, args, kwargs, instance, timeout_sec, entry)
+	if result.is_ok() or not _needs_dependency_restart(result):
+		return result
+	var restart_key := _script_context(script_id) + "|" + str(entry.hash)
+	if _dep_restart_done.has(restart_key):
+		return result  # schon einmal probiert - Fehler ehrlich durchreichen
+	_dep_restart_done[restart_key] = true
+	# Deklarationen persistent machen (dependencies.txt) und Instanz neu
+	# starten - der Provisioner installiert die fehlenden Pakete, danach
+	# wird der Call genau einmal wiederholt.
+	register_dependencies(PythonBridgeDependencyManager.deps_from_source(entry.source))
+	var inst_name := instance if instance != "" else PythonBridgeConfig.DEFAULT_INSTANCE
+	var inst := _get_instance_by_name(inst_name)
+	if inst == null:
+		return result
+	inst.shutdown_now()
+	var restarted := await start_instance(inst_name)
+	if restarted.is_error():
+		return restarted
+	return await _call_script_inner(script_id, function, args, kwargs, instance, timeout_sec, entry)
+
+## True, wenn der Fehler einen fehlenden, per __bridge_deps__ deklarierten
+## Paket-Spec betrifft (Executor-Gate: DEPENDENCY_ERROR vor der Ausfuehrung).
+## Genau dieser Fall ist per Neustart + Provisionierung behebbar; reine
+## Tippfehler im Nutzercode (NameError ohne Deklaration) bleiben unberuehrt.
+func _needs_dependency_restart(result: PythonBridgeResult) -> bool:
+	return str(result.error.get("code", "")) == "DEPENDENCY_ERROR"
+
+func _call_script_inner(script_id: String, function: String, args: Array, kwargs: Dictionary, instance: String, timeout_sec: float, entry: Dictionary) -> PythonBridgeResult:
 	var task := PythonBridgeTask.make_call(_next_task_id(), _script_context(script_id), entry.source,
 		function, args, kwargs, int(timeout_sec * 1000.0))
 	task.source_hash = entry.hash
@@ -389,6 +506,46 @@ func define_script(script_id: String, instance := PythonBridgeConfig.DEFAULT_INS
 ## Server genau den Context invalidiert, den die Calls nutzen.
 func _script_context(script_id: String) -> String:
 	return "script:" + resolve_script_path(script_id)
+
+## Deklariert Abhaengigkeiten aus GDScript (statt/als Ergaenzung zu
+## __bridge_deps__ im Python-Code und dependencies.txt). Muss VOR
+## start_instance() aufgerufen werden - die Pakete landen im naechsten
+## Provisionierungs-Lauf der venv.
+##
+##     PythonBridge.register_dependencies(["numpy", "pandas>=2.0"])
+##     await PythonBridge.start_instance()
+func register_dependencies(deps: PackedStringArray) -> PythonBridgeResult:
+	var ws_fs := ProjectSettings.globalize_path(str(_settings.get("workspace_dir",
+		PythonBridgeConfig.DEFAULT_WORKSPACE_DIR)))
+	var cfg_dir := ws_fs + "/config"
+	DirAccess.make_dir_recursive_absolute(cfg_dir)
+	var path := cfg_dir + "/dependencies.txt"
+	var existing := {}
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f:
+			for line in f.get_as_text().split("\n"):
+				var s := line.strip_edges()
+				if s != "" and not s.begins_with("#"):
+					existing[s] = true
+			f.close()
+	var added := PackedStringArray()
+	for dep in deps:
+		var d := str(dep).strip_edges()
+		if d != "" and not existing.has(d):
+			existing[d] = true
+			added.append(d)
+	if added.is_empty():
+		return PythonBridgeResult.success({"added": [], "file": path})
+	var out := FileAccess.open(path, FileAccess.WRITE)
+	if out == null:
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
+			"Cannot write dependencies file: " + path))
+	for d in existing.keys():
+		out.store_line(str(d))
+	out.close()
+	return PythonBridgeResult.success({"added": Array(added), "file": path})
 
 func _submit_and_await(task: PythonBridgeTask, instance: String) -> PythonBridgeResult:
 	var res := _submit_task_with_instance(task, instance)
