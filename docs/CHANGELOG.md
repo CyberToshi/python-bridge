@@ -2,6 +2,18 @@
 
 ## v0.3.2 (current)
 
+### Belastungsprobe (Echtspiel-Verifikation)
+
+- Realer Test in einem frischen Godot-Projekt ("Belastungsprobe"): Cython
+  vs. pure Python (**51x Speedup** bei identischer Mandelbrot-Berechnung),
+  numpy-Wellengrid live in eine 3D-Punktwolke (10 Hz), pandas-GroupBy
+  (100k Zeilen, ~360 ms) und 10 s Dauerlast mit parallelen Calls
+  (**775 Calls/10 s, 0 Fehler**).
+- Aus der Probe resultierende Fixes: `compile_cython` akzeptiert beide
+  Godot-await-Signalformen (Argument direkt vs. Array), parallele Caller
+  warten auf den laufenden Build statt Fehler, `res://`-Pfade werden vor
+  Prozessstart globalisiert (Host-Prozesse verstehen kein res://).
+
 ### Cython-Sonderpfad (Desktop)
 
 - **.pyx-Skripte als First-Class-Buerger**: Toggle im Editor-Dock ("Als
