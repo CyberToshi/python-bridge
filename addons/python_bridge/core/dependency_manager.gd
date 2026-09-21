@@ -22,8 +22,10 @@ extends RefCounted
 
 const DEPS_MARKER := "__bridge_deps__"
 
-# findet: __bridge_deps__ = [ ... ]  (erste Zeile, vor allen Strings)
-const _DEPS_LINE_RE := "^__bridge_deps__\\s*=\\s*\\["
+# findet: __bridge_deps__ = [ ... ]  (Top-Level, d.h. am Zeilenanfang -
+# (?m) macht ^ zeilenweise; eingerueckte/nested Deklarationen zaehlen nicht,
+# konsistent zur AST-Extraktion der Python-Seite)
+const _DEPS_LINE_RE := "(?m)^__bridge_deps__\\s*=\\s*\\["
 
 
 ## Extrahiert Paketnamen aus einem Python-Quelltext (ohne ihn auszuführen).
@@ -39,15 +41,16 @@ static func deps_from_source(source: String) -> PackedStringArray:
 	if regex.search(source) == null:
 		return out
 	for line in source.split("\n"):
+		if not line.begins_with(DEPS_MARKER):
+			continue  # nur Top-Level-Zeilen (keine Einrueckung)
 		var t := line.strip_edges()
-		if t.begins_with(DEPS_MARKER):
-			var inner := _bracket_content(t)
-			if inner == "":
-				continue
-			for spec in _string_literals(inner):
-				if not out.has(spec):
-					out.append(spec)
-			return out  # nur die erste Deklaration zählt
+		var inner := _bracket_content(t)
+		if inner == "":
+			continue
+		for spec in _string_literals(inner):
+			if not out.has(spec):
+				out.append(spec)
+		return out  # nur die erste Deklaration zählt
 	return out
 
 
@@ -73,7 +76,7 @@ static func from_scripts_dir(scripts_dir: String) -> PackedStringArray:
 				for spec in from_scripts_dir(full):
 					if not out.has(spec):
 						out.append(spec)
-		elif entry.ends_with(".py"):
+		elif entry.ends_with(".py") or entry.ends_with(".pyx"):
 			var f := FileAccess.open(full, FileAccess.READ)
 			if f:
 				for spec in deps_from_source(f.get_as_text()):

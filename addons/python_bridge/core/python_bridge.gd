@@ -567,9 +567,15 @@ func _call_script_inner(script_id: String, function: String, args: Array, kwargs
 			var build_res: PythonBridgeResult = await compile_cython("", false)
 			if build_res.is_error():
 				return build_res
-		return await _submit_and_await(PythonBridgeTask.make_call(_next_task_id(),
+		# Cython-Tasks tragen keine Source - die __bridge_deps__-Deklarationen
+		# des .pyx-Scripts gehen via task.meta["deps"] an den Server (Auto-
+		# Installation fehlender Pakete vor dem Aufruf), sonst wuerde ein
+		# numpy-Import im kompilierten Modul mit DependencyError enden.
+		var ctask := PythonBridgeTask.make_call(_next_task_id(),
 			"cython:" + entry_path, "", function, args, kwargs,
-			int(timeout_sec * 1000.0)), instance)
+			int(timeout_sec * 1000.0))
+		ctask.meta["deps"] = PythonBridgeDependencyManager.deps_from_source(entry.source)
+		return await _submit_and_await(ctask, instance)
 	var task := PythonBridgeTask.make_call(_next_task_id(), _script_context(script_id), entry.source,
 		function, args, kwargs, int(timeout_sec * 1000.0))
 	task.source_hash = entry.hash

@@ -1,6 +1,27 @@
 # Changelog
 
-## v0.3.2 (current)
+## v0.3.3 (current)
+
+### Fixed: __bridge_deps__-Kette
+
+- **Deklarationen werden jetzt überall erkannt**: Der GDScript-Regex
+  verankerte `^__bridge_deps__` nur an der allerersten Datei-Zeile —
+  Deklarationen nach Kommentaren/Imports (Praxis-Normalfall) wurden
+  ignoriert. Jetzt zeilenankerbasierend wie die AST-Extraktion der
+  Python-Seite.
+- **Cython-Scripts vererben ihre Dependencies**: `.pyx`-Tasks tragen keine
+  Source, deshalb bekam der Server-Auto-Install ihre Deklarationen nie.
+  Deklarationen laufen jetzt via `task.meta["deps"]` mit → fehlende Pakete
+  (z. B. numpy) werden vor dem ersten Cython-Call automatisch installiert.
+- **`.pyx` im Workspace-Dep-Scan**: Der Provisioner las bei der Sammlung
+  der Skript-Dependencies nur `*.py` — `.pyx`-Deklarationen zählen jetzt
+  auch.
+
+Verifiziert: frischer Aufruf-Pfad mit `hello_cython.pyx` (numpy-Deklaration
+nach Kommentarzeilen) — venv erhielt numpy automatisch, `smear`-Call
+lieferte korrekt, Suite 180/180 OK.
+
+## v0.3.2
 
 ### Belastungsprobe (Echtspiel-Verifikation)
 
