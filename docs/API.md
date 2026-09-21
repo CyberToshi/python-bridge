@@ -19,8 +19,12 @@ PythonBridge.configure({
 1. **Im Python-Skript** (empfohlen, Single Source of Truth):
 
    ```python
-   __bridge_deps__ = ["numpy", "pandas>=2.0"]   # erste Zeile
+   __bridge_deps__ = ["numpy", "pandas>=2.0"]
    ```
+
+   Die Deklaration gehört auf Top-Level (Zeilenanfang, keine Einrückung) —
+   die Position in der Datei ist frei, auch unterhalb von Kommentaren oder
+   Imports. Gilt für `.py` **und** `.pyx`-Dateien (seit v0.3.3).
 
    Desktop: installiert der Provisioner automatisch in die venv; fehlt ein
    Paket beim ersten Call, installiert der Server es nach (oder startet die

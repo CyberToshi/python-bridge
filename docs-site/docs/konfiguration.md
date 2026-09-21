@@ -55,6 +55,10 @@ import numpy as np            # Importe immer oben in die Datei
 __bridge_deps__ = ["numpy", "scipy"]
 ```
 
+Die Deklaration muss auf **Top-Level** stehen (Zeilenanfang, keine
+Einrückung) — die Position in der Datei ist dabei frei, auch unterhalb von
+Kommentaren oder Imports. Für `.pyx`-Dateien gilt dasselbe.
+
 Skript-Deps und `dependencies` werden zusammengeführt. Ist ein Paket nicht
 installierbar (z. B. ohne Netz), schlägt der Aufruf mit einer klaren
 `DEPENDENCY_ERROR`-Meldung ab, statt mit `ModuleNotFoundError` zur Laufzeit

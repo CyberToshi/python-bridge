@@ -245,6 +245,71 @@ if result.is_error():
 Damit bleibt die eigentliche Ursache sichtbar und wird nicht durch eine
 allgemeine Fehlermeldung ersetzt.
 
+## 8. Typische Stolpersteine (aus der Praxis)
+
+Die häufigsten Fehler, die Einsteiger treffen — und wie du sie in Sekunden
+erkennst:
+
+### `print(result.value)` zeigt `<RefCounted#...>`
+
+`call_script` gibt ein **Ergebnis-Objekt** zurück, nicht den Wert. Der Wert
+steckt in `.value`:
+
+```gdscript
+var r = await PythonBridge.call_script("hello", "say_hello", ["Hi"])
+print(r.value)   # nicht: print(r)
+```
+
+### `result.value` ist `null`
+
+Zwei mögliche Ursachen — der Unterschied liegt in `is_ok()`:
+
+```gdscript
+if r.is_ok():
+    print("Python hat None zurückgegeben")   # return vergessen?
+else:
+    print("Aufruf fehlgeschlagen: ", r.error) # Ursache steht hier
+```
+
+- **`ok=true`, `value=null`**: Dein Python-Code hat kein `return` gesetzt.
+- **`ok=false`**: Der Aufruf ist fehlgeschlagen — `r.error` enthält
+  `code`, `message` und `traceback`. **Immer dieses Muster verwenden**, nie
+  blind `.value` lesen. (Ein fehlender `return` oder falsche Argumente
+  sehen ohne `is_ok()` identisch aus: `null`.)
+
+### Argumente passen nicht zur Funktion
+
+Cython-Funktionen haben typisierte Parameter — ein falscher Typ wird
+hart abgelehnt (anders als in reinem Python):
+
+```python
+def smear(list xs, int passes):   # will Liste + Zahl
+```
+
+```gdscript
+# FALSCH:  call_script("m", "smear", [3.5, 100000])   -> TypeError
+# RICHTIG: call_script("m", "smear", [[1.0, 2.0, 3.0], 100000])
+```
+
+### Skript-Name vs. Datei-Name
+
+Die Skript-ID ist der **Dateiname ohne Endung**: Datei `mathtools.pyx` →
+`call_script("mathtools", ...)`. Existiert die Datei nicht im
+`scripts`-Ordner des Workspaces, gibt es einen klaren
+`BRIDGE_ERROR`-Fehler (kein Crash).
+
+### Der goldenen Debug-Print
+
+Wenn irgend etwas unklar ist, zuerst diese Zeile (temporär einbauen):
+
+```gdscript
+print("ok=", r.is_ok(), " | value=", r.value, " | error=", r.error)
+```
+
+Sie zeigt sofort, auf welcher Seite das Problem liegt — Python-Fehler
+(`PYTHON_EXCEPTION` mit Traceback), fehlende Pakete (`DEPENDENCY_ERROR`)
+oder falsche IDs (`BRIDGE_ERROR`).
+
 ## Nächste Schritte
 
 - [Konfiguration](./konfiguration) – alle Einstellungen erklärt

@@ -55,8 +55,12 @@ Damit die weiteren Kapitel eindeutig sind, hier die wichtigsten Begriffe:
 | **PythonBridge (Autoload)** | Der globale Singleton (`PythonBridge`), deine einzige GDScript-Schnittstelle. Alle Funktionen sind `await`-bar. |
 | **Instanz** | Ein Python-Prozess + ein WebSocket-Kanal. Benannt (`default`, `worker-a`, …). Mehrere Instanzen laufen parallel. |
 | **Task** | Eine Arbeitseinheit („run“ / „call“ / „define“). Durchläuft `QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED/TIMEOUT`. |
-| **Kontext (Context)** | Ein persistenter Python-Namespace innerhalb einer Instanz (erkennbar an einer Context-ID). Skripte erhalten den Kontext `script:<pfad>`. |
-| **Skript** | Eine normale `.py`-Datei unter `<workspace>/scripts/`. Wird gecacht und nur bei Änderung neu übertragen. |
+| **Kontext (Context)** | Ein persistenter Python-Namespace innerhalb einer Instanz. Skripte erhalten den Kontext `script:<pfad>`; Variablen/Funktionen bleiben zwischen Calls erhalten. |
+| **Skript** | Eine `.py`-Datei unter `<workspace>/scripts/`. Wird gecacht und nur bei Änderung neu übertragen. |
+| **Skript-ID** | Dateiname ohne Endung: `mathtools.pyx` → `"mathtools"` in `call_script` |
+| **venv** | Isolierte Python-Umgebung im Workspace — die Bridge erstellt und installiert sie automatisch |
+| **`__bridge_deps__`** | Paket-Deklaration im Skript: `__bridge_deps__ = ["numpy"]` — fehlende Pakete werden automatisch installiert (Top-Level-Zeile, Position frei) |
+| **PythonBridgeResult** | Rückgabe-Objekt jedes Calls: `.value` (Ergebnis), `.is_ok()`, `.error` (Details bei Fehlschlag) |
 | **Wrapper** | Automatisch generierte GDScript-Klasse, die eine Python-Datei als `PyBridge<Name>` verfügbar macht. |
 | **Workspace** | Projektordner `res://python_bridge/` mit `scripts/`, `wrappers/`, `venv/`, `tmp/`, `config/`. |
 | **DataRef** | Leichtgewichtiges Handle auf einen großen Datensatz, der im Python-Prozess liegt – die Daten selbst werden erst bei Bedarf geholt. |

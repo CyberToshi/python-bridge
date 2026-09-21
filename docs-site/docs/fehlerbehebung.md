@@ -78,6 +78,8 @@ if result.is_error():
 | `Script not found: hello` | Datei fehlt oder ID falsch | Skript muss unter `<workspace>/scripts/hello.py` liegen; ID = Name ohne `.py` |
 | `Instance not ready` / `status = not_ready` | Aufruf vor `start_instance()` | Immer erst `await PythonBridge.start_instance("default")` |
 | Ergebnis ist `null`/leer | Funktion gibt nichts zurück | `return` im Python-Code setzen |
+| `print(result)` zeigt `<RefCounted#...>` | Das Ergebnis-Objekt wurde statt des Werts ausgegeben | `print(result.value)` — `call_script` liefert ein `PythonBridgeResult` |
+| `result.value` ist `null`, aber Python rechnet korrekt | Call fehlgeschlagen (Argumente/IDs/Paket) oder `return` fehlt | Erst `result.is_ok()` prüfen; bei `false` steht die Ursache in `result.error` (Code + Traceback) |
 | Zustand „verschwindet“ | Andere Instanz als beim ersten Aufruf | Kontext ist instanzgebunden: immer dieselbe Instanz angeben |
 | Python-Änderung wirkt nicht | mtime-Cache bzw. kein Hot Reload | `PythonBridge.hot_reload_script("mein_skript")` oder Dock-Button |
 | print() aus Python fehlt in Godot | Ausgaben werden nicht durchgereicht | Werte per `return` liefern und in GDScript printen (Details: [Python-Seite](./python-seite)) |
