@@ -6,11 +6,14 @@ description: Bedienung des integrierten Python-Docks direkt im Godot-Editor, Sch
 
 # Godot-Integration: Bedienung im Editor
 
-:::caution UI ab Version 0.4.0 überarbeitet
-Das Editor-Dock wurde in **0.4.0** neu gebaut (Tab-Container mit stabilen Tabs,
-schmale Toolbar mit `⋯`-Menü, temporäre Scratch-Tabs, Löschen/Umbenennen).
-Die Screenshots und Button-Beschriftungen dieser Seite zeigen den Stand davor.
-Verbindlich ist
+:::caution Stand 0.5.0 — Screenshots sind Platzhalter
+Das Dock wurde in **0.4.0** neu gebaut (Tab-Container mit stabilen Tabs,
+schmale Symbol-Toolbar, temporäre Scratch-Tabs, Löschen/Umbenennen) und in
+**0.5.0** um den Einstellungsdialog erweitert; außerdem meldet das Dock jeden
+Speichervorgang an die Bridge, damit im Web-Export auch Skripte ankommen, die
+**nach** dem Python-Start entstehen. Die Bilder auf dieser Seite ersetzen
+noch Platzhalter — die beschriebenen Beschriftungen und Wege sind aber der
+Code-Stand von 0.5.0. Verbindlich bleibt
 [docs/ERSTE_SCHRITTE.md](https://github.com/CyberToshi/python-bridge/blob/main/docs/ERSTE_SCHRITTE.md) §6.
 :::
 
@@ -63,18 +66,21 @@ Zahlen (auch `0x…`/`0b…`/Floats mit Exponent) sowie Strings inklusive
 **mehrzeiliger Docstrings** ab.
 :::
 
-| Nr. | Element | Funktion |
+Die Toolbar ist bewusst schmal: drei Aktionen plus zwei Statuslabels und das
+`⋯`-Menü. Alles Seltene liegt im Menü, nicht als Button.
+
+| Element | Beschriftung / Kürzel | Funktion |
 |---|---|---|
-| ① | **Refresh** | Skriptliste neu einlesen (`res://python_bridge/scripts/`) |
-| ② | **New script** | Neues Python-Skript anlegen (Dialog) |
-| ③ | Statuszeile | `status: scripts: N` / `run ok` / Fehlerstatus |
-| ④ | Skriptliste | Alle `.py`-Dateien des Workspace (Klick öffnet sie) |
-| ⑤ | Tabs + Code-Editor | **Mehrere Dateien gleichzeitig offen** – jeder Tab ist ein eigener Editor mit Python-Syntax-Highlighting und eigener Undo-Historie. **Zeilennummern** (null-aufgefüllt), 4-Space-Indentation, sichtbare Tabs. Ungespeicherte Änderungen zeigen ein `*` im Tab; Schließen (X) fragt bei ungespeicherten Änderungen nach. |
-| ⑥ | **Save** | Editor-Inhalt zurück in die `.py`-Datei schreiben |
-| ⑦ | **Run** | Skript auf Instanz `default` ausführen (Timeout 30 s) |
-| ⑧ | **Generate wrapper** | GDScript-Anbindung automatisch erzeugen |
-| ⑨ | **Hot reload** | Python-Instanz neu definieren (Code-Änderung) |
-| ⑩ | Log | Ausgaben: grün = ok, rot = Fehler, blau = Hinweise |
+| **Neu** | `＋`, **Strg+N** | Menü mit **„Neue Datei …“** (Dialog, ID ohne `.py`) und **„Temporäres Skript“** (Scratch-Tab, landet nie auf der Platte). |
+| **Speichern** | **Strg+S** | Schreibt den aktiven Tab in die Datei und meldet die Änderung an die Bridge. Im Web-Export ist das der Weg, auf dem ein neu angelegtes Skript überhaupt im Pyodide-Workspace ankommt. |
+| **Ausführen** | **Strg+Enter** | `execute_script(id, {}, "default", 30.0)` — bewusst nicht F5/F6, die gehören im Editor dem Projekt. |
+| Statuszeile | `bereit` / `run ok` / Fehler | Ergebnis des letzten Laufs, links neben dem Instanzlabel. |
+| **Python: …** | `Python: ready` | Zustand der Instanz `default` (`none`, `provisioning`, `ready`, `crashed`, …). |
+| **`⋯`** | **Weitere Aktionen** | GDScript-Wrapper generieren · Hot Reload · **Als Cython-Modul speichern (.pyx)** (Haken) · Cython kompilieren · Umbenennen … · Löschen … · Log leeren · **Einstellungen …** |
+| Filterfeld | `Filtern …` | Blendet die Skriptliste live auf passende IDs ein. |
+| Skriptliste | links | Alle `.py`/`.pyx`-Dateien unter `<workspace>/scripts`; Klick öffnet im Tab, Rechtsklick bietet Öffnen / Umbenennen / Löschen. |
+| Tabs + Code-Editor | Mitte | **Mehrere Dateien gleichzeitig offen** – jeder Tab mit eigener Undo-Historie, **Zeilennummern**, 4-Space-Indentation, sichtbaren Tabs und Python-Highlighting inklusive mehrzeiliger Docstrings. `*` im Tab = ungespeichert; Schließen fragt nach. |
+| Log | unten | grün = ok, rot = Fehler (mit Traceback), blau = Hinweise. |
 
 Der Standard-Workspace liegt unter `res://python_bridge/`:
 Skripte in `res://python_bridge/scripts/`, generierte Wrapper in
@@ -84,9 +90,10 @@ Skripte in `res://python_bridge/scripts/`, generierte Wrapper in
 
 ![Dialog New script](/img/ui/ui-03-neues-script.png)
 
-1. Klick auf **New script** ①.
-2. Skript-ID eingeben – z. B. `hello`, **ohne** `.py` ②.
-3. Bestätigen ③ → die Datei `res://python_bridge/scripts/hello.py` wird mit
+1. **Neu → Neue Datei …** (`＋` in der Toolbar, **Strg+N**).
+2. Skript-ID eingeben – z. B. `hello`, **ohne** `.py`. Die ID wird geprüft
+   (`validate_script_id`); leerer Rückgabewert = verwendbar.
+3. Bestätigen → die Datei `res://python_bridge/scripts/hello.py` wird mit
    einem Kommentar-Kopf angelegt.
 
 ![Editor mit Code](/img/ui/ui-04-hello-py-editor.png)
@@ -101,18 +108,21 @@ def say_hello(message):
     return "Hello Godot! " + message
 ```
 
-6. **Save** schreibt die Datei zurück ② ③. Wichtig: Es bleibt eine **echte,
-   normale `.py`-Datei** – außerhalb von Godot mit jedem Python lauffähig.
+6. **Speichern** (**Strg+S**) schreibt die Datei zurück. Wichtig: Es bleibt
+   eine **echte, normale `.py`-Datei** – außerhalb von Godot mit jedem Python
+   lauffähig. Das Dock ruft dabei `notify_script_saved()` auf; im Web landet
+   der Inhalt so im Pyodide-Workspace, auf dem Desktop wird der Quelltext-Cache
+   verworfen (nächster Aufruf kompiliert neu).
 
 ## 4. Skript ausführen (im Dock)
 
 ![Run mit Log](/img/ui/ui-05-run-log.png)
 
-1. Klick auf **Run** ①. Das Dock ruft `execute_script("hello", {}, "default", 30.0)` auf.
-2. Das Log zeigt den Ablauf ②:
+1. **Ausführen** (**Strg+Enter**). Das Dock ruft `execute_script("hello", {}, "default", 30.0)` auf.
+2. Das Log zeigt den Ablauf:
    - `run hello`
    - `ok: Hello Godot! Python received: …` (grün)
-3. Die Statuszeile wechselt auf `run ok` ③.
+3. Die Statuszeile wechselt auf `run ok`.
 
 Fehler werden nicht verschluckt: Bei einer Python-Exception erscheinen Status,
 Fehlermeldung und – falls vorhanden – der Traceback rot im Log.
@@ -146,11 +156,11 @@ func _ready() -> void:
 
 ![Wrapper generiert](/img/ui/ui-07-wrapper-generiert.png)
 
-1. Klick auf **Generate wrapper** ①.
+1. **`⋯` → GDScript-Wrapper generieren**.
 2. Das Addon liest die Python-Funktionen per `introspect_script` und schreibt
    eine GDScript-Anbindung nach
-   `res://python_bridge/wrappers/<skript>_wrapper.gd` ②.
-3. Die Datei erscheint im Dateisystem-Dock ③ und ist über den Dateinamen
+   `res://python_bridge/wrappers/<skript>_wrapper.gd`.
+3. Die Datei erscheint im Dateisystem-Dock und ist über den Dateinamen
    eindeutig als **generiert** erkennbar.
 
 Sicherheitsregel: Eine **manuell geschriebene** Datei an gleicher Stelle wird
@@ -190,7 +200,7 @@ Plugin aktivieren            (Projekt-Einstellungen → Plugins)
    ↓
 Dock „Python Bridge“ öffnen  (rechts oben)
    ↓
-New script → Python schreiben → Save        (echte .py-Datei)
+Neu → Neue Datei → Python schreiben → Speichern (echte .py-Datei)
    ↓
 Run im Dock  oder  call_script aus GDScript (Live-Szene, F6)
    ↓

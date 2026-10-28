@@ -71,6 +71,17 @@ if result.is_error():
 | Parse-Fehler beim Projektstart | alte Godot-Version / unvollständige Kopie | Godot 4.2+; Addon-Ordner frisch kopieren |
 | Dock reagiert nicht | Autoload noch nicht bereit | Editor einmal neu laden |
 
+## Cython, Web und Datei-Sync (ab 0.5.0)
+
+| Symptom | Ursache | Lösung |
+|---|---|---|
+| `Microsoft Visual C++ 14.0 or greater is required` | Windows ohne MSVC **und** ohne MinGW — `ziglang` hilft dort nicht, weil setuptools den MSVC-Treiber erzwingt | „Build Tools for Visual Studio" **oder** MinGW-w64 in den PATH; Details in [Cython-Module](./cython) |
+| Cython liefert alten Code | `.pyx` geändert, aber das alte `.pyd`/`.so` lag noch daneben | Seit 0.5.0 erkennt der SHA-256-Vergleich das und baut neu; sonst `⋯ → Cython kompilieren` |
+| `CythonModuleNotFound` trotz vorhandener `.pyd` | bis 0.4.0 wurde der Windows-Pfad als Modulname benutzt | Seit 0.5.0 wird der Stem plattformfest abgeleitet — Addon aktualisieren |
+| Web: neu angelegtes Skript ist nicht importierbar | Datei entstand nach dem Python-Start im Godot-`user://`, nicht im Worker | Seit 0.5.0 spiegelt `file_op` sie automatisch; Instanz einmal neu starten zieht den Puffer nach |
+| Web: gelöschtes Skript bleibt importierbar | Das Modul lag noch in `sys.modules`/`__pycache__` | Löschen über das Dock bzw. `notify_script_deleted()` — der Worker verwirft beides |
+| Log: `file_op: '..' ist nicht erlaubt` | Pfad außerhalb von `scripts/`, `modules/`, `plugins/`, `packages/` | ID/Unterordner prüfen — der Worker lehnt den Pfad ab und lebt weiter |
+
 ## Laufzeitprobleme (häufige Anfängerfehler)
 
 | Symptom | Ursache | Lösung |

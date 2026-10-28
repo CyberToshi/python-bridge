@@ -53,6 +53,32 @@ sie nicht doppelt pflegen. Pakete, die **nicht** im Bundle stecken, führt die
 Bridge beim Aufruf nicht still aus, sondern meldet eine klare
 `DEPENDENCY_ERROR`-Meldung (kein `ModuleNotFoundError` zur Laufzeit).
 
+## Dateien zur Laufzeit: der `file_op`-Kanal (ab 0.5.0)
+
+Godots `user://` und das MEMFS des Pyodide-Workers sind **zwei getrennte
+Dateisysteme**. Bis 0.4.0 existierten Skripte, die erst **nach** dem Bundle
+entstanden, im Worker gar nicht: `create_script()` schrieb die Datei auf
+Godot-Seite, der `import` im Worker scheiterte — und gelöschte Skripte blieben
+weiter importierbar.
+
+Seit 0.5.0 spiegelt die Facade jede Änderung als **einseitige Nachricht**
+(`file_op` mit `op = "write"` bzw. `"delete"`, ohne Ack) in den Worker:
+
+| Auslöser | Wirkung im Worker |
+|---|---|
+| `create_script()` / `notify_script_saved()` | Datei wird im Workspace geschrieben; `__pycache__` und der `sys.modules`-Eintrag werden verworfen, damit der nächste Import den neuen Code zieht |
+| `notify_script_deleted()` | Datei verschwindet, das Modul ist nicht mehr importierbar |
+| noch keine Instanz `ready` | Ops werden gepuffert (letzte Op pro Pfad gewinnt, FIFO, hart begrenzt) und bei `ready` nachgezogen — genau der Fall „Skript anlegen, bevor Python startet“ |
+
+Das Dock meldet Speichern/Umbenennen/Löschen selbst an die Bridge; bei eigenem
+Dateihandling außerhalb des Docks rufst du dieselben Funktionen auf.
+
+Sicherheitsnetz im Worker: Pfade müssen innerhalb von `scripts/`, `modules/`,
+`plugins/` oder `packages/` liegen. `..`, absolute Pfade und ein fehlender
+Workspace-Root werden abgelehnt, ohne den Worker zu beenden. Geschrieben wird
+atomar (`.tmp` + `os.replace`) mit 8-MB-Limit; `scripts/` landet automatisch
+auf `sys.path`.
+
 ## Server-Hardening seit v0.3.2
 
 Auch der Web-Pfad profitiert von der Desktop-Hardening-Runde: Ergebnisse

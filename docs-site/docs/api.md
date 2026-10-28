@@ -40,6 +40,17 @@ Setzt die globale Konfiguration (merge über Defaults). **Vor** dem ersten
 #### `config() -> Dictionary` *(synchron)*
 Gibt eine Kopie der aktiven Konfiguration zurück.
 
+#### `reload_config() -> PythonBridgeResult` *(synchron)*
+Liest die Kette **Defaults → Projekt-Einstellungen → `<workspace>/config.json`**
+neu ein (ohne `configure()`-Werte zu verlieren). Laufende Instanzen bleiben
+unangetastet — neue Werte gelten beim nächsten `start_instance()` bzw.
+`restart_instance()`. Wert: `{settings, project_settings[], config_file}`.
+
+```gdscript
+var cfg: Dictionary = PythonBridge.reload_config().value.settings
+await PythonBridge.restart_instance("default")   # Werte jetzt anwenden
+```
+
 #### `workspace_dir() -> String` *(synchron)*
 Der aktive Workspace-Pfad (Default `res://python_bridge`).
 
@@ -64,6 +75,12 @@ if r.is_error():
 Status-Text der Instanz: `none`, `provisioning`, `starting`, `connecting`,
 `handshake`, `ready`, `crashed`, `restarting`, `stopping`, `stopped`,
 `error`.
+
+#### `restart_instance(instance_name := "default", timeout_sec := 15.0) -> PythonBridgeResult` ⏳
+Stoppt die Instanz, wartet das Ende ab und startet neu. Direktes
+`stop_instance()` + `start_instance()` scheitert am Zwischenzustand
+`stopping` — deshalb dieser Weg. Hängt der Stop, wird der Prozess hart beendet,
+statt einen zweiten daneben zu starten.
 
 #### `get_instance(instance_name := "default") -> BridgeInstance` *(synchron)*
 Die Instanz als Node (fortgeschritten; normalerweise nicht nötig).
@@ -143,6 +160,49 @@ Benötigt eine `ready`-Instanz.
 Übernimmt Änderungen am Skript gemäß `hot_reload_mode`. Liefert
 `{"reloaded": bool, "mode": …}`. Godot-Zustand bleibt unangetastet; bei
 `restart_instance` wird der Prozess neu gestartet.
+
+### Skript-Verwaltung (Dateien)
+
+Seit 0.5.0 meldet das Dock jede Änderung an die Bridge; bei eigenem
+Dateihandling rufst du dieselben Funktionen auf. Im Web ist das der einzige
+Weg, auf dem Skripte im Pyodide-Workspace landen.
+
+#### `list_scripts() -> Array` *(synchron)*
+Alle persistenten Skripte als `[{id, ext, path}]`.
+
+#### `validate_script_id(script_id: String) -> String` *(synchron)*
+`""` = verwendbar, sonst die Fehlermeldung (ungültige Zeichen, reservierte
+Namen, bereits belegt).
+
+#### `delete_script(script_id: String) -> PythonBridgeResult` *(synchron)*
+Löscht rückstandsfrei: Quelle, `.py.uid`, `.pyc`/`__pycache__`, `.c`,
+`.so`/`.pyd`, Objektdateien in `cython_build_tmp`, Build-Zustand und einen
+generierten Wrapper. Wert: `{ok, existed, removed[], failed[],
+cython_state_cleared}`.
+
+#### `notify_script_saved(script_id: String, path: String) -> void` *(synchron)*
+Nach einem externen Speichern: Quelltext-Cache verwerfen und die Datei per
+`file_op` in den Web-Worker spiegeln (Desktop: nur Cache).
+
+#### `notify_script_deleted(script_id: String) -> void` *(synchron)*
+Meldet die Löschung an den Worker, damit `__pycache__` und der
+`sys.modules`-Eintrag verschwinden.
+
+#### `forget_script_cache(path: String) -> void` *(synchron)*
+Verwirft nur den Hash-/Quelltext-Cache für einen Pfad (nächster Aufruf
+kompiliert neu).
+
+### Cython (Desktop)
+
+#### `create_cython_script(script_id: String, code: String) -> PythonBridgeResult` *(synchron)*
+Legt `<workspace>/scripts/<id>.pyx` an (statt `.py`) und räumt ein
+gegebenenfalls vorhandenes `.py` weg.
+
+#### `compile_cython(scripts_dir := "", force := false) -> PythonBridgeResult` ⏳
+Kompiliert alle `.pyx`-Dateien inkrementell. Report:
+`{ok, built[], skipped[], errors[], compiler, duration_s}`. Compiler-Strategie:
+Windows MSVC → MinGW, POSIX System-CC → `ziglang` (siehe
+[Cython-Module](./cython)).
 
 ### Low-Level-Tasks (fortgeschritten)
 

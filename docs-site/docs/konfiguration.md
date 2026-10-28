@@ -6,9 +6,43 @@ description: Alle Einstellungen der Python Bridge – Schlüssel, Standardwerte 
 
 # Konfiguration
 
-Die Bridge wird komplett über eine zentrale Konfiguration gesteuert. Du
-übergibst ein Dictionary an `PythonBridge.configure()` – alle nicht genannten
-Schlüssel behalten ihre Standardwerte.
+Die Bridge wird über eine zentrale Konfiguration gesteuert. Seit **v0.5.0**
+kannst du sie vollständig im Editor setzen; `PythonBridge.configure()` bleibt
+für Code-Defaults und Sonderfälle.
+
+## Wo Einstellungen herkommen (Präzedenz)
+
+Drei Orte, gleiche Felder — Code ist keiner davon zwingend:
+
+| Ort | Wofür |
+|---|---|
+| **Projekt → Projekteinstellungen → Python Bridge** | Projektweite Defaults; landen in `project.godot` und gelten auch im Export. |
+| **Dock → `⋯` → Einstellungen …** | Schnelles Ändern im Editor, mit **„Speichern & neu starten“**, damit die laufende Instanz die Werte sofort übernimmt. |
+| **`<workspace_dir>/config.json`** | Werte ohne Godot-UI (CI, Server, generierte Projekte). |
+
+Zusätzlich liegt unter **Projekt → Werkzeuge → Python Bridge** ein Menü mit
+Dock anzeigen, Neue Datei, Einstellungen, Instanz starten/stoppen und
+Cython kompilieren — die Funktionen sind also nicht im Dock versteckt.
+
+**Präzedenz beim Start (später gewinnt):** Defaults → Projekt-Einstellungen →
+`config.json` → `configure()` aus Code. Eine laufende Instanz behält die
+Werte, mit denen sie gestartet wurde.
+
+```gdscript
+# Kette neu einlesen (Projekt-Einstellungen + config.json + Defaults).
+# Laufende Instanzen bleiben unangetastet — neue Werte gelten beim
+# nächsten start_instance() bzw. restart_instance().
+var res := PythonBridge.reload_config()
+var settings: Dictionary = res.value.settings
+
+# Werte sofort anwenden:
+await PythonBridge.restart_instance("default")
+```
+
+Die Schlüssel der Projekt-Einstellungen (Präfix `python_bridge/`):
+`general/autostart`, `general/workspace_dir`, `general/python_executable`,
+`general/dependencies` (Komma-String), `general/hot_reload_mode`,
+`general/auto_generate_wrappers`.
 
 ## Wann konfigurieren?
 

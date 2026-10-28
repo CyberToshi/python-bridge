@@ -22,6 +22,8 @@ gesamte technische Infrastruktur dazwischen:
 - Python-Editor-Dock direkt im Godot-Editor
 - optionale automatische GDScript-Wrapper
 - DataRefs plus binärer bzw. dateibasierter Transport für große Daten
+- Einstellungen in den **Projekteinstellungen** und im Dock — ohne eine Zeile Code
+- **Datei-Sync im Web**: Skripte, die erst zur Laufzeit entstehen, kommen im Browser-Workspace an
 
 ## Die wichtigste Regel
 
@@ -86,7 +88,7 @@ Damit die weiteren Kapitel eindeutig sind, hier die wichtigsten Begriffe:
 
 | Voraussetzung | Details |
 |---|---|
-| Godot | **4.2 oder neuer**; dieses Projekt wurde mit **4.7.2** verifiziert (auch als Flatpak) |
+| Godot | **4.2 oder neuer**; dieses Projekt wurde mit **4.6** und **4.7** verifiziert (auch als Flatpak) |
 | Python | **3.8 oder neuer**; gesucht in dieser Reihenfolge: ① `python_executable`-Konfiguration, ② `PYTHON_PATH`-Umgebungsvariable, ③ `PATH`-Suche (`python`, `python3`, `py`, …), ④ Plattform-Fallback |
 | Schreibzugriff | auf den Workspace (`res://python_bridge`), damit `venv`, temporäre Dateien und Skripte angelegt werden können; für exportierte Spiele `user://` verwenden |
 | Netzwerk | Zugriff auf `localhost` (WebSocket zwischen Godot und Python) |
@@ -94,10 +96,13 @@ Damit die weiteren Kapitel eindeutig sind, hier die wichtigsten Begriffe:
 
 ### Verifizierter Stand
 
-Mit der echten Engine verifiziert: 0 GDScript-Kompilierfehler, 193/193
-GDScript-Assertions, Autoload + Dock + Plugin (`VERIFY: PASS`), Live-
-Hello-World und die komplette DataRef-Datenebene (36/36 Checks, inkl.
-Datei-Transport). Details und Prüfbefehle: [Godot-Verifikation](./godot-verification).
+Mit echten Engines und echten Runtimes verifiziert (Stand 0.5.0):
+**384 GDScript-Assertions** in acht Suiten, **205 Python-Tests**, **24
+Prüfpunkte in einer echten Pyodide-Runtime** und **9 Live-Cython-Checks**
+gegen einen echten Server-Prozess — dazu Autoload + Dock im Editor-Kontext
+(`[VERIFY] RESULT: PASS`) und die komplette DataRef-Datenebene. Getestet mit
+Godot 4.6 und 4.7 sowie Python 3.13. Details und Prüfbefehle:
+[Godot-Verifikation](./godot-verification).
 
 ## Dokumentationsweg
 

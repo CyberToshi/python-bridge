@@ -52,7 +52,7 @@ var r := await PythonBridge.call_script("mathtools", "smear", [3.5, 100_000])
 | Build-Trigger | Erster `call_script` auf ein `.pyx`-Skript ohne kompilierte Seite, Editor-Button oder `PythonBridge.compile_cython()` |
 | Change-Detection | SHA-256 der `.pyx` gegen `.cython_state.json`; **unveränderte Module werden übersprungen** (Start bleibt schnell) |
 | Kompilieren | inkrementell via setuptools `build_ext --inplace` in der bestehenden venv |
-| Compiler | System-Compiler (gcc/cc/clang bzw. MSVC), **falls vorhanden** — sonst automatischer Fallback auf das pip-Paket `ziglang` (kompletter C-Compiler als Wheel, kein System-Setup) |
+| Compiler | Plattformfeste Reihenfolge (seit 0.5.0): **Windows** MSVC → MinGW (`--compiler=mingw32`); **Linux/macOS** System-CC (`gcc`/`cc`/`clang`) → `ziglang` aus pip. Wichtig: auf Windows hilft `ziglang` nicht, weil setuptools dort den MSVC-Treiber erzwingt — deshalb der MinGW-Weg. |
 | Pakete | Fehlende Build-Komponenten (`cython`, `setuptools`, ggf. `ziglang`) installiert das Tool **selbst in die venv**; Skript-Deps wie `numpy` kommen wie gehabt über `__bridge_deps__` |
 | Aufruf | Das kompilierte Modul wird importiert; seine öffentlichen Funktionen liegen im persistenten Kontext — `call_script` verhält sich identisch zu `.py` |
 
@@ -60,18 +60,22 @@ var r := await PythonBridge.call_script("mathtools", "smear", [3.5, 100_000])
 
 - **Python-Header** für die Build-Zeit: Linux `python3-dev` (bei den meisten
   Distributionen schon da), Windows bringt die venv-Header mit.
-- **System-Compiler optional**: ohne gcc/MSVC übernimmt `ziglang`
+- **Linux/macOS**: ohne gcc/cc/clang übernimmt `ziglang`
   (`__bridge_deps__ = ["ziglang"]` oder automatische Selbstinstallation).
   Der erste zig-Build braucht ~30–60 s (eigener Stdlib-Cache), danach ist er
   genauso inkrementell schnell wie gcc.
-- **Windows**: mit installierten „Build Tools for Visual Studio" nutzt die
-  Bridge den MSVC automatisch; ohne ihn greift der ziglang-Fallback.
+- **Windows**: entweder die „Build Tools for Visual Studio" (MSVC) **oder**
+  MinGW-w64 (`gcc` im PATH). Die Bridge probiert beides automatisch durch;
+  fehlt beides, meldet der Build-Report klar, was zu installieren ist, statt
+einen MSVC-Dump auszugeben.
 
 ## Fehlerbilder
 
 | Meldung | Ursache | Lösung |
 |---|---|---|
-| `CythonModuleNotFound` | `.pyx` noch nicht kompiliert (Build fehlgeschlagen) | Details aus dem Build-Report im Godot-Log; nach Fix erneut **Compile Cython** |
+| `CythonModuleNotFound` | `.pyx` noch nicht kompiliert (Build fehlgeschlagen) | Details aus dem Build-Report im Godot-Log; nach Fix erneut **Cython kompilieren** |
+| `Microsoft Visual C++ 14.0 or greater is required` | Windows ohne MSVC **und** ohne MinGW | Build Tools installieren **oder** MinGW-w64 in den PATH legen; der Report nennt beide Wege |
+| Geänderte `.pyx` wirkt nicht | bis 0.4.0 wurde nur „gibt es ein `.so`/`.pyd`?“ geprüft | Seit 0.5.0 vergleicht `call_script` den SHA-256 der `.pyx` — geänderte Dateien werden neu gebaut. Bleibt es alt: einmal **Cython kompilieren** |
 | `Cython-Build-Komponenten fehlen` | Self-Provisioning ausgeschaltet (`--no-install`) oder ohne Netz | `pip install cython setuptools` in der venv |
 | Compile-Fehler im Report | Syntax-/Typfehler im Cython-Code | Fehlerzeile steht im `errors[0].message` des Reports |
 | Web-Export warnt über `.pyx` | Cython im Browser nicht möglich | Diese Skripte Desktop-only nutzen oder in `.py` mit numpy lösen |
