@@ -210,15 +210,29 @@ def _dependency_available(spec, installed=()):
     """True, wenn `spec` (Requirement-String wie "numpy>=1.20") im aktuellen
     Interpreter importierbar ist. `installed` ist ein optionaler Satz bereits
     verifizierter Distributionsnamen (aus dem Provisioner)."""
-    name = re.split(r"[<>=!~\[;,]", str(spec), 1)[0].strip().lower()
-    if not name:
+    raw = str(spec).strip()
+    # Reine pip-Optionen ("--extra-index-url …") und VCS-URLs ohne Namen sind
+    # keine pruefbaren Pakete.
+    if not raw or raw.startswith("-"):
         return True
+    # Direkte URL-/VCS-Requirements haben keinen importierbaren Namen, den man
+    # hier nachweisen koennte - pip hat sie bereits aufgeloest.
+    if "://" in raw or raw.startswith(("git+", "hg+", "svn+", "bzr+")):
+        return True
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", raw)
+    if not match:
+        return True
+    name = match.group(0).lower()
     if name in installed:
         return True
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError, AttributeError):  # noqa: BLE001
-        return False
+    # PEP 503: "scikit-learn" und "scikit_learn" meinen dasselbe Paket.
+    for candidate in {name, name.replace("-", "_").replace(".", "_")}:
+        try:
+            if importlib.util.find_spec(candidate) is not None:
+                return True
+        except (ImportError, ValueError, AttributeError):  # noqa: BLE001
+            continue
+    return False
 
 
 def _error(exc_type, exc, code=protocol.CATEGORY_PYTHON_EXCEPTION):

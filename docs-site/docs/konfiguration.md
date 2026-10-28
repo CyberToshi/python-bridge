@@ -100,6 +100,33 @@ zu scheitern. Im Web-Build landen deklarierte Pakete automatisch im
 Bundle (siehe [Python im Browser](./web-runtime)).
 :::
 
+### Beliebige Bibliotheken?
+
+**Desktop: ja** — alles, was `pip install` in einer frischen venv schafft. Der
+Provisioner ruft genau das auf (voller Resolver, PyPI als Default-Index,
+PEP-517-Build-Isolation). Die drei Quellen (`__bridge_deps__`,
+`dependencies`, `config/dependencies.txt`) werden zusammengeführt:
+
+| Schreibweise | Beispiel |
+|---|---|
+| Name | `numpy` |
+| Pin | `pandas>=2.0`, `numpy==1.26.4`, `beautifulsoup4~=4.12` |
+| Extras | `requests[socks]` |
+| Direkte Wheel-URL | `mypkg @ https://…/mypkg-1.0-py3-none-any.whl` |
+| VCS | `git+https://github.com/a/b.git@v1` (braucht `git`) |
+| pip-Option (nur `dependencies.txt`) | `--extra-index-url https://…`, `-f https://…` |
+
+Grenzen sind die von pip: Pakete **ohne Wheel** brauchen einen C-Compiler
+(siehe [Cython-Module](./cython)) und teils Systembibliotheken. Das Ergebnis
+steht in `<workspace>/tmp/pip.log`; ein Fehlschlag kommt als
+`DEPENDENCY_ERROR` zurück, nie still.
+
+**Web: eingeschränkt.** Der Pyodide-Worker lädt Pakete über
+`pyodide.loadPackage()` — also nur, was im Pyodide-Repository liegt
+(`web_packages` plus die `__bridge_deps__` aus dem Bundle). Reine
+PyPI-Pakete, die dort fehlen, und native Erweiterungen außerhalb des
+Pyodide-Builds funktionieren im Browser nicht.
+
 ### Tasks, Queue & Timeouts
 
 | Schlüssel | Default | Bedeutung |

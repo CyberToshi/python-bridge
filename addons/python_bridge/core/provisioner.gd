@@ -229,7 +229,10 @@ func _verify_imports(quiet := false) -> bool:
 		return false
 	var ok := true
 	for dep in deps:
-		var mod := str(dep).split("==")[0].split(">=")[0].split("<")[0].strip_edges()
+		# Gemeinsame PEP-508-Auswertung: "beautifulsoup4~=4.12",
+		# "requests[socks]==2.32" und "pkg @ https://…" duerfen die Pruefung
+		# nicht mehr sprengen (vorher blieb der ganze Spec als Name stehen).
+		var mod := PythonBridgeDependencyManager.requirement_name(str(dep))
 		if mod == "":
 			continue
 		if not _dist_present(sp, mod):
@@ -250,7 +253,9 @@ func _dist_present(sp: String, mod: String) -> bool:
 	var dir := DirAccess.open(sp)
 	if dir == null:
 		return false
-	var prefix := mod.to_lower() + "-"
+	# Import-Name und Distributionsname weichen oft ab; fuer den dist-info-
+	# Vergleich gilt PEP 503 ("scikit-learn" == "scikit_learn").
+	var prefix := PythonBridgeDependencyManager.normalize_dist_name(mod) + "-"
 	var found := false
 	dir.list_dir_begin()
 	var entry := dir.get_next()
@@ -298,7 +303,7 @@ func verified_dependencies() -> PackedStringArray:
 	var out := PackedStringArray()
 	for spec in PythonBridgeDependencyManager.combined_requirements(
 			str(_cfg.get("workspace_fs", "")), _cfg.get("dependencies", PackedStringArray())):
-		var name := str(spec).split("==")[0].split(">")[0].split("<")[0].strip_edges().to_lower()
+		var name := PythonBridgeDependencyManager.requirement_name(str(spec)).to_lower()
 		if name != "":
 			out.append(name)
 	return out

@@ -12,6 +12,35 @@ PythonBridge.configure({
     "workspace_dir": "res://python_bridge",   # wo scripts/ venv/ tmp/ liegen
     "python_executable": "",                  # leer = automatische Suche
     "dependencies": ["numpy"],                # zusätzlich zu websockets
+    "autostart": false,
+    # Task Manager / Backpressure
+    "max_queued_tasks": 1000,
+    "max_payload_bytes": 67108864,            # 64 MiB
+    "task_timeout_ms": 30000,
+    "max_retries": 0,
+    "retry_policy": "connection_error",       # none|connection_error|process_error|all
+    # Batching
+    "max_batch_size": 32,
+    "max_batch_delay_ms": 32,
+    # Frame-Sync
+    "max_dispatch_per_frame": 16,
+    "max_results_per_frame": 64,
+    "max_inbox_size": 512,
+    # Health / Crash-Restart
+    "health_check_interval_ms": 5000,
+    "health_missed_pong_limit": 3,
+    "max_restart_attempts": 3,
+    "restart_base_delay_ms": 500,
+    "restart_backoff_factor": 2,
+    "stable_uptime_ms": 30000,
+    "shutdown_timeout_ms": 3000,
+    # Hot Reload
+    "hot_reload_mode": "reload_context",      # none|reload_context|restart_instance
+    # Editor / Wrapper
+    "auto_generate_wrappers": false,
+})
+```
+
 ```
 
 Praezedenz beim Start (spaeter gewinnt): Defaults → Projekt-Einstellungen
@@ -70,34 +99,38 @@ dieselbe Quelle).
 3. **Datei** `python_bridge/config/dependencies.txt` (eine Zeile pro Paket,
    `#`-Kommentare erlaubt).
 
-```gdscript    "autostart": false,
-    # Task Manager / Backpressure
-    "max_queued_tasks": 1000,
-    "max_payload_bytes": 67108864,            # 64 MiB
-    "task_timeout_ms": 30000,
-    "max_retries": 0,
-    "retry_policy": "connection_error",       # none|connection_error|process_error|all
-    # Batching
-    "max_batch_size": 32,
-    "max_batch_delay_ms": 32,
-    # Frame-Sync
-    "max_dispatch_per_frame": 16,
-    "max_results_per_frame": 64,
-    "max_inbox_size": 512,
-    # Health / Crash-Restart
-    "health_check_interval_ms": 5000,
-    "health_missed_pong_limit": 3,
-    "max_restart_attempts": 3,
-    "restart_base_delay_ms": 500,
-    "restart_backoff_factor": 2,
-    "stable_uptime_ms": 30000,
-    "shutdown_timeout_ms": 3000,
-    # Hot Reload
-    "hot_reload_mode": "reload_context",      # none|reload_context|restart_instance
-    # Editor / Wrapper
-    "auto_generate_wrappers": false,
-})
-```
+Alle drei Quellen werden zusammengefuehrt und in **einem** pip-Lauf
+installiert; Duplikate werden entfernt.
+
+### Welche Pakete funktionieren?
+
+**Desktop: alles, was `pip install` in einer frischen venv schafft.** Der
+Provisioner ruft genau das auf (`python -m pip install -r
+<workspace>/config/requirements_combined.txt`) — voller Resolver, PyPI als
+Default-Index, PEP-517-Build-Isolation. Akzeptiert werden alle
+Requirements-Schreibweisen:
+
+| Schreibweise | Beispiel | Anmerkung |
+|---|---|---|
+| Name | `numpy` | |
+| Pin | `pandas>=2.0`, `numpy==1.26.4`, `beautifulsoup4~=4.12` | `~=`, `!=` und Marker funktionieren seit v0.5.0 auch in der „ist es schon da?“-Pruefung |
+| Extras | `requests[socks]` | Extras landen mit in der venv |
+| Direkte URL | `mypkg @ https://…/mypkg-1.0-py3-none-any.whl` | nur Wheels, die zu Plattform und Python-Version passen |
+| VCS | `git+https://github.com/a/b.git@v1` | braucht `git` im PATH |
+| pip-Option (nur `dependencies.txt`) | `--extra-index-url https://…`, `-f https://…` | wird unveraendert an pip durchgereicht |
+
+Grenzen sind die von pip, nicht die der Bridge: Pakete ohne Wheel brauchen
+einen C-Compiler (siehe `docs/ERSTE_SCHRITTE.md` §5.6) und teils
+Systembibliotheken; fuer brandneue Python-Versionen fehlen manchmal noch
+Wheels. Das Ergebnis steht in `<workspace>/tmp/pip.log`; ein Fehlschlag wird
+als `DEPENDENCY_ERROR` gemeldet, nie still verschluckt.
+
+**Web: nur, was Pyodide kennt.** Der Worker laedt Pakete per
+`pyodide.loadPackage()` aus dem Pyodide-Repository (`web_packages` bzw. die
+`__bridge_deps__` aus dem Bundle). Reine PyPI-Pakete, die dort nicht
+enthalten sind, sowie alles mit kompilierten Anteilen ausserhalb des
+Pyodide-Builds gibt es im Browser nicht — dafuer bleibt der Desktop-Weg.
+
 
 ### Instanzen
 

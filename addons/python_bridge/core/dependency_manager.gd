@@ -114,6 +114,46 @@ static func combined_requirements(
 
 # ------------------------------------------------------------------ intern
 
+## Reiner Distributionsname einer Requirement-Angabe (PEP 508).
+##
+## Deckt alles ab, was pip akzeptiert und was frueher die Namenspruefung
+## zerlegt hat:
+##   "numpy"                  -> numpy
+##   "pandas>=2.0"            -> pandas
+##   "beautifulsoup4~=4.12"   -> beautifulsoup4
+##   "requests[socks]==2.32"  -> requests
+##   "pkg @ https://…/x.whl"  -> pkg
+##   "--extra-index-url https://…" -> "" (reine pip-Option, kein Paket)
+##   "git+https://…/@main"    -> "" (VCS-URL ohne Name, nicht pruefbar)
+##
+## Der Name endet am ersten Zeichen, das in einer Spec nicht mehr zum Namen
+## gehoert (Extras, Versionsoperator, Marker, Whitelabel-Trenner) bzw. an
+## Leerraum. Damit funktionieren beide Seiten - Installieren UND
+## "ist es schon da?" - mit denselben Regeln.
+static func requirement_name(spec: String) -> String:
+	var s := str(spec).strip_edges()
+	if s == "" or s.begins_with("-"):
+		return ""
+	var out := ""
+	for i in s.length():
+		var c := s[i]
+		if c == " " or c == "\t" or c == "[" or c == "<" or c == ">" or c == "=" \
+				or c == "!" or c == "~" or c == ";" or c == "," or c == "@" or c == "(":
+			break
+		out += c
+	# VCS-/URL-Angaben ("git+https://…", "https://…/x.whl") haben keinen
+	# Distributionsnamen, den man in site-packages nachweisen koennte.
+	if out.contains("://") or out.contains("/"):
+		return ""
+	return out
+
+
+## PEP-503-Normalisierung fuer den Vergleich mit *.dist-info-Ordnern:
+## lower, '-' und '.' werden zu '_' ("scikit-learn" -> "scikit_learn").
+static func normalize_dist_name(name: String) -> String:
+	return str(name).strip_edges().to_lower().replace("-", "_").replace(".", "_")
+
+
 ## Inhalt der ersten [ ... ]-Klammer einer Zeile (oder "" ohne Abschluss).
 static func _bracket_content(line: String) -> String:
 	var start := line.find("[")

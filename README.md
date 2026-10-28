@@ -62,8 +62,8 @@ example/minimal/       absolutes Minimum (eine Szene, drei Zeilen GDScript)
 example/hello/          Minimalbeispiel (Szene + Beispielskript)
 example/maximum/       alle Register (alle Config-Keys, 2 Instanzen, .py + .pyx, DataRef)
 example/web_demo/       komplettes Web-Demo (Desktop + Browser, Bundle inklusive)
-tests/python/           Python-`unittest`-Suite (205 Tests)
-tests/gdscript/         GDScript-Headless-Testrunner (391 Assertions) + Editor-Verifikation
+tests/python/           Python-`unittest`-Suite (213 Tests)
+tests/gdscript/         GDScript-Headless-Testrunner (404 Assertions) + Editor-Verifikation
 tests/live_cython_e2e.py  portables Live-E2E für den Cython-Pfad (baut wirklich)
 tools/                  export_check.py, build_web_bundle.py, test_web_runtime.mjs
 ```

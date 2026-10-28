@@ -68,6 +68,16 @@
   lief zwangsweise in `Introspect timeout` - damit war auch die
   Wrapper-Generierung im Dock unbrauchbar. Der Typ steht jetzt in der
   Routing-Liste, `tests/gdscript/test_instance_routing.gd` pinnt das.
+- **Beliebige PyPI-Pakete als Dependency, auch mit "schwierigen" Specs.**
+  Die Namenspruefung nach dem pip-Lauf zerlegte Requirements nur an `==`,
+  `>=` und `<`: `beautifulsoup4~=4.12` blieb als kompletter String stehen,
+  galt als "nicht in site-packages", das Provisioning brach ab - obwohl pip
+  erfolgreich war. Jetzt werten `PythonBridgeDependencyManager.requirement_name()`
+  und `executor._dependency_available()` PEP 508 einheitlich aus (Pins,
+  `~=`, `!=`, Extras, Marker, `pkg @ URL`, VCS-URLs, pip-Optionen) und
+  vergleichen dist-info-Namen PEP-503-konform (`scikit-learn` ==
+  `scikit_learn`). Abgedeckt durch `tests/gdscript/test_dependency_specs.gd`
+  und `tests/python/test_dependency_specs.py`.
 - **Beispiele fuer beide Enden:** `example/minimal/` (Szene + drei Zeilen) und
   `example/maximum/` (alle 45 Config-Keys, zwei Instanzen, `.py` + `.pyx`,
   DataRef, Introspection, alle Signale) - beide headless verifiziert und in der
@@ -83,8 +93,8 @@
   frisch, startet einen echten Server und prueft Call, Persistenz,
   Fehlerpfad und inkrementelles Skip - vorher mit Linux-Hardcodings
   unbrauchbar.
-- Zahlen: 205 Python-Tests (0 skipped, sobald numpy/pandas/scipy in der
-  Testumgebung liegen), 391 GDScript-Assertions, 17 Editor-Verifikationen,
+- Zahlen: 213 Python-Tests (0 skipped, sobald numpy/pandas/scipy in der
+  Testumgebung liegen), 404 GDScript-Assertions, 17 Editor-Verifikationen,
   9 Live-Cython-Checks, 24 Checks in echter Pyodide-Runtime (mit Bundle).
 - `tools/test_web_runtime.mjs` lief unter Windows gar nicht (Node verlangt
   `file://`-URLs für absolute Modulpfade) - behoben. Der Test prüft jetzt auch

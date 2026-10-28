@@ -97,7 +97,7 @@ Damit die weiteren Kapitel eindeutig sind, hier die wichtigsten Begriffe:
 ### Verifizierter Stand
 
 Mit echten Engines und echten Runtimes verifiziert (Stand 0.5.0):
-**391 GDScript-Assertions** in neun Suiten, **205 Python-Tests**, **24
+**404 GDScript-Assertions** in neun Suiten, **213 Python-Tests**, **24
 Prüfpunkte in einer echten Pyodide-Runtime** und **9 Live-Cython-Checks**
 gegen einen echten Server-Prozess — dazu Autoload + Dock im Editor-Kontext
 (`[VERIFY] RESULT: PASS`) und die komplette DataRef-Datenebene. Getestet mit
