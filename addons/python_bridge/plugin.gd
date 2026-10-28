@@ -14,6 +14,8 @@ var _hp_plugin: EditorPlugin = null
 var _autoload_added_by_plugin: bool = false
 
 func _enter_tree() -> void:
+	# Projekt-Einstellungen zuerst: die Facade liest sie in _enter_tree.
+	_register_settings()
 	# Nur registrieren, falls noch nicht vorhanden (Plugin kann sich
 	# mehrfach ein-/ausschalten). Der Pfad wird ueber get_script()
 	# abgeleitet, damit das Add-on in JEDEM Unterordner funktioniert.
@@ -26,6 +28,7 @@ func _enter_tree() -> void:
 	# Der Node-Name ist zugleich der Dock-Tab-Titel im Editor.
 	_panel.name = "Python Bridge"
 	add_control_to_dock(DockSlot.DOCK_SLOT_RIGHT_UL, _panel)
+	_build_tool_menu()
 
 	# Export-Plugin: .py/.txt/.json/.md automatisch in jeden Export packen.
 	_ensure_export_plugin()
@@ -48,6 +51,7 @@ func _enter_tree() -> void:
 func _exit_tree() -> void:
 	# Sauberer Shutdown aller Python-Instanzen, danach Dock + Autoload
 	# entfernen.
+	_remove_tool_menu()
 	_remove_export_plugin()
 	var pb := _get_bridge()
 	if pb:
@@ -64,6 +68,89 @@ func _exit_tree() -> void:
 	if _autoload_added_by_plugin and ProjectSettings.has_setting("autoload/" + AUTOLOAD_NAME):
 		remove_autoload_singleton(AUTOLOAD_NAME)
 		_autoload_added_by_plugin = false
+
+# ------------------------------------------------------------------ Projekt-Einstellungen
+## Registriert die Einstellungen aus PythonBridgeConfig.project_setting_defs()
+## unter "Projekt > Projekteinstellungen > Python Bridge". Das ist der MANUELLE
+## Weg: Wer nichts anfasst, bekommt dieselben Defaults wie die Automatik
+## (eigene venv, Workspace unter res://python_bridge).
+func _register_settings() -> void:
+	for def in PythonBridgeConfig.project_setting_defs():
+		var path := str(def["path"])
+		var default_value: Variant = def["default"]
+		if not ProjectSettings.has_setting(path):
+			ProjectSettings.set_setting(path, default_value)
+		ProjectSettings.set_initial_value(path, default_value)
+		ProjectSettings.add_property_info({
+			"name": path,
+			"type": int(def["type"]),
+			"hint": int(def["hint"]),
+			"hint_string": str(def["hint_string"]),
+		})
+
+# ------------------------------------------------------------------ Tool-Menue
+## Einstiegspunkte unter "Projekt > Werkzeuge", damit die Funktionen nicht
+## nur im Dock-Tab versteckt sind.
+func _build_tool_menu() -> void:
+	add_tool_menu_item("Python Bridge: Dock anzeigen", _show_dock)
+	add_tool_menu_item("Python Bridge: Neue Datei …", _new_file)
+	add_tool_menu_item("Python Bridge: Einstellungen …", _show_settings)
+	add_tool_menu_item("Python Bridge: Instanz starten", _start_instance)
+	add_tool_menu_item("Python Bridge: Instanz stoppen", _stop_instance)
+	add_tool_menu_item("Python Bridge: Cython kompilieren", _compile_cython)
+
+func _remove_tool_menu() -> void:
+	for label in ["Python Bridge: Dock anzeigen", "Python Bridge: Neue Datei …",
+			"Python Bridge: Einstellungen …", "Python Bridge: Instanz starten",
+			"Python Bridge: Instanz stoppen", "Python Bridge: Cython kompilieren"]:
+		remove_tool_menu_item(label)
+
+## Best effort: das Dock liegt in einem Tab-Container des Editors. Wenn der
+## Nutzer den Tab geschlossen/ausgeblendet hat, gibt es dafuer keine offizielle
+## Editor-API - dann zeigen wir wenigstens den Tab und holen das Dock nach vorn.
+func _show_dock() -> void:
+	if _panel == null:
+		return
+	_panel.show()
+	var parent := _panel.get_parent()
+	if parent is TabContainer:
+		(parent as TabContainer).current_tab = _panel.get_index()
+	_panel.grab_focus()
+
+func _new_file() -> void:
+	if _panel == null:
+		return
+	_show_dock()
+	_panel.call("open_new_file_dialog")
+
+func _show_settings() -> void:
+	if _panel == null:
+		return
+	_show_dock()
+	_panel.call("open_settings")
+
+func _start_instance() -> void:
+	var pb := _get_bridge()
+	if pb == null:
+		push_warning("[PythonBridge] Autoload nicht gefunden - Plugin neu aktivieren.")
+		return
+	var res: Variant = await pb.call("start_instance", "default")
+	if res is PythonBridgeResult:
+		print("[PythonBridge] Instanz: ", (res as PythonBridgeResult).is_ok())
+
+func _stop_instance() -> void:
+	var pb := _get_bridge()
+	if pb != null:
+		pb.call("stop_instance", "default")
+
+func _compile_cython() -> void:
+	var pb := _get_bridge()
+	if pb == null:
+		return
+	var res: Variant = await pb.call("compile_cython", "", false)
+	if res is PythonBridgeResult:
+		print("[PythonBridge] Cython: ", (res as PythonBridgeResult).value
+			if (res as PythonBridgeResult).is_ok() else (res as PythonBridgeResult).error_message())
 
 # Treibt die Polling-Schleife zusaetzlich aus dem Editor, damit Instanzen
 # auch dann zuverlaessig ticken, wenn der Autoload im Editor-Kontext nicht

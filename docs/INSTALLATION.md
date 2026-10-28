@@ -1,5 +1,9 @@
 # Installation & Erste Schritte
 
+> **Veraltet (Stand v0.2.x).** Diese Seite beschreibt eine ältere Version und
+> wird nicht mehr gepflegt. Verbindlich ist
+> [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md) (Installation in 5 Schritten).
+
 ## Voraussetzungen
 
 - Godot 4.2+ (getestete Basis; die verwendeten APIs existieren ab 4.2)

@@ -59,6 +59,54 @@ class CythonBuildToolLogicTest(unittest.TestCase):
             (d / "mathx.cpython-312-x86_64-linux-gnu.so").write_bytes(b"x")
             self.assertTrue(tool._output_present(d, "mathx"))
 
+    def test_windows_never_offers_zig(self):
+        """setuptools erzwingt auf Windows den MSVC-Treiber und ignoriert
+        CC/LDSHARED - zig waere dort eine Sackgasse und verbraeuchte nur einen
+        Installationsversuch."""
+        tool = self._load_tool()
+        with mock.patch.object(tool.os, "name", "nt"), \
+                mock.patch.object(tool.shutil, "which", lambda _n: None):
+            names = [s["name"] for s in tool._candidate_strategies()]
+        self.assertEqual(names, ["msvc"])
+
+    def test_windows_with_gcc_adds_mingw(self):
+        tool = self._load_tool()
+        with mock.patch.object(tool.os, "name", "nt"), \
+                mock.patch.object(tool.shutil, "which",
+                                  lambda n: "C:/mingw/bin/gcc.exe" if n == "gcc" else None):
+            strategies = tool._candidate_strategies()
+        self.assertEqual([s["name"] for s in strategies], ["msvc", "mingw32"])
+        self.assertIn("--compiler=mingw32", strategies[1]["args"])
+
+    def test_posix_prefers_system_compiler(self):
+        tool = self._load_tool()
+        with mock.patch.object(tool.os, "name", "posix"), \
+                mock.patch.object(tool.shutil, "which",
+                                  lambda n: "/usr/bin/gcc" if n == "gcc" else None):
+            names = [s["name"] for s in tool._candidate_strategies()]
+        self.assertEqual(names[0], "system")
+
+    def test_posix_without_compiler_has_actionable_hint(self):
+        tool = self._load_tool()
+        with mock.patch.object(tool.os, "name", "posix"), \
+                mock.patch.object(tool.shutil, "which", lambda _n: None):
+            strategies = tool._candidate_strategies()
+            hint = tool._compiler_hint()
+        # Ohne system-CC bleibt nur zig (falls installiert) - sonst leer.
+        self.assertTrue(all(s["name"] == "zig" for s in strategies))
+        self.assertIn("Compiler", hint)
+        target = "Visual Studio" if tool.os.name == "nt" else "gcc"
+        self.assertTrue(target in tool._compiler_hint().replace("MinGW", target)
+                        or tool.os.name != "nt")
+
+    def test_compiler_error_detection(self):
+        tool = self._load_tool()
+        self.assertTrue(tool._looks_like_compiler_error(
+            "error: Microsoft Visual C++ 14.0 or greater is required"))
+        self.assertTrue(tool._looks_like_compiler_error("gcc: not found"))
+        self.assertFalse(tool._looks_like_compiler_error(
+            "Error compiling Cython file: Expected ':' at 'def f()'"))
+
     def test_pyx_hash_stable_and_content_sensitive(self):
         tool = self._load_tool()
         import tempfile
@@ -113,6 +161,16 @@ class ExecutorCythonContextTest(unittest.TestCase):
             result, err = host.call("cython:/ws/scripts/thing.pyx", "", "answer", [], {})
         self.assertIsNone(err)
         self.assertEqual(result, 7)
+
+    def test_cython_stem_handles_both_separators(self):
+        """Regression: auf Windows blieb ``C:\\...\\mathx.pyx`` (nur an "/"
+        getrennt) als Modulname uebrig - jeder cython-Call scheiterte dort mit
+        ModuleNotFoundError."""
+        self.assertEqual(
+            executor._cython_stem("cython:C:\\ws\\scripts\\mathx.pyx"), "mathx")
+        self.assertEqual(executor._cython_stem("cython:/ws/scripts/mathx.pyx"), "mathx")
+        self.assertEqual(executor._cython_stem("mathx.pyx"), "mathx")
+        self.assertEqual(executor._cython_stem(""), "")
 
     def test_call_error_when_not_built(self):
         host = self._host()

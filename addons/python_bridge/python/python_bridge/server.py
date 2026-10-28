@@ -21,13 +21,14 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 
 try:
     import websockets
 except ImportError:  # Browser-Runtime (Pyodide): server.py wird dort durch
     websockets = None  # browser_host.py ersetzt; der Import darf nicht brechen.
 
-from . import protocol, executor, introspection
+from . import protocol, executor, introspection, workspace_files
 from .data_registry import DataStore, cleanup_orphan_files
 from .serializer import encode_obj
 
@@ -265,6 +266,27 @@ async def _handle_connection(ws, state):
                     else:
                         await _send_text(ws, send_lock, protocol.build_response(
                             protocol.MSG_RELOAD_ACK, msg_id, "error", error=err))
+                elif mtype == protocol.MSG_INVALIDATE:
+                    # Kontexte und importierte Cython-Module verwerfen, nachdem
+                    # ein Skript geloescht oder zwischen .py/.pyx umgeschaltet
+                    # wurde. Einseitig ohne Ack; die naechste Task folgt per
+                    # FIFO und sieht damit garantiert den neuen Zustand.
+                    host.invalidate(message.get("contexts") or [],
+                                    message.get("modules") or [])
+                elif mtype == protocol.MSG_FILE_OP:
+                    # Paritaet zum Web-Host: Datei im Workspace schreiben oder
+                    # loeschen. Auf dem Desktop normalerweise ein No-op
+                    # (Godot hat die Datei bereits geschrieben), aber bei
+                    # erzwungenem Web-Transport der einzige Weg.
+                    tmpdir = str(state.get("tmpdir", ""))
+                    workspace_root = str(Path(tmpdir).resolve().parent) if tmpdir else ""
+                    op_result = workspace_files.apply_file_op(
+                        workspace_root, str(message.get("op", "")),
+                        str(message.get("path", "")),
+                        str(message.get("content", "")))
+                    if not op_result.get("ok"):
+                        _server_log("[python_bridge] file_op: %s"
+                                    % op_result.get("error", "failed"))
                 elif mtype == protocol.MSG_INTROSPECT:
                     await _handle_introspect(ws, send_lock, message, msg_id)
                 elif mtype == protocol.MSG_DATA_GET:

@@ -1,4 +1,4 @@
-# Python Bridge — API-Referenz (v0.3.1)
+# Python Bridge — API-Referenz (v0.5.0)
 
 Alle Funktionen sind Instanz-Methoden des Autoload-Singletons `PythonBridge`.
 Aufrufe, die Python ausführen, liefern ein `PythonBridgeResult`.
@@ -13,6 +13,36 @@ PythonBridge.configure({
     "python_executable": "",                  # leer = automatische Suche
     "dependencies": ["numpy"],                # zusätzlich zu websockets
 ```
+
+Praezedenz beim Start (spaeter gewinnt): Defaults → Projekt-Einstellungen
+(*Projekt → Projekteinstellungen → Python Bridge*) → `<workspace>/config.json`
+→ `configure()` aus Code.
+
+```gdscript
+# Projekt-Einstellungen + config.json neu einlesen (laesst laufende Instanzen
+# unangetastet - neue Werte gelten beim naechsten start_instance()):
+var res := PythonBridge.reload_config()
+# res.value = {settings, project_settings[], config_file}
+
+# Nur einzelne Werte zur Laufzeit nachziehen, ohne die Kette zu verlieren:
+var cfg: Dictionary = PythonBridge.reload_config().value.settings
+```
+
+Die im Editor sichtbaren Felder samt Pfaden:
+
+| Projekt-Einstellung | Key | Typ |
+|---|---|---|
+| `python_bridge/general/autostart` | `autostart` | bool |
+| `python_bridge/general/workspace_dir` | `workspace_dir` | Ordner |
+| `python_bridge/general/python_executable` | `python_executable` | Datei |
+| `python_bridge/general/dependencies` | `dependencies` | Komma-String |
+| `python_bridge/general/hot_reload_mode` | `hot_reload_mode` | Auswahl |
+| `python_bridge/general/auto_generate_wrappers` | `auto_generate_wrappers` | bool |
+| `python_bridge/web/packages` | `web_packages` | Komma-String |
+
+Die Liste ist maschinenlesbar: `PythonBridgeConfig.project_setting_defs()`
+(genau diese Eintraege registriert das Plugin und der Dock-Dialog verwendet
+dieselbe Quelle).
 
 ### Dependencies deklarieren (drei gleichberechtigte Wege)
 
@@ -77,6 +107,7 @@ PythonBridge.configure({
 | `get_instance(name)` | `BridgeInstance` oder `null`. |
 | `instance_status(name)` | `none/provisioning/starting/connecting/handshake/ready/crashed/restarting/stopping/stopped/error`. |
 | `stop_instance(name)` / `stop_all()` / `shutdown()` | Graceful Stop (non-blocking). |
+| `await restart_instance(name, timeout_sec := 15.0)` | Stop abwarten, dann neu starten (z. B. nach Einstellungsänderungen). Direktes `stop_instance()` + `start_instance()` scheitert am `stopping`-Zustand. |
 | `shutdown_now()` | Sofortiger Force-Stop (keine Zombies; für `_exit_tree`). |
 
 ### Skripte & Ausführung
@@ -112,6 +143,26 @@ var cb := await PythonBridge.compile_cython()           # force=false
 var r5 := await PythonBridge.call_script("mathtools", "f", [21])
 ```
 
+### Skript-Verwaltung (Dateien)
+
+```gdscript
+# Alle persistenten Skripte: [{id, ext, path}]
+for entry in PythonBridge.list_scripts():
+    print(entry["id"], entry["ext"])
+
+# Id fuer neue Dateien pruefen ("" = verwendbar)
+var err := PythonBridge.validate_script_id("mein_modul")
+
+# Rueckstandsfrei loeschen: Quelle, .py.uid, .pyc/__pycache__, .c, .so/.pyd,
+# .o/.obj (cython_build_tmp), Build-Zustand und generierter Wrapper (+ .uid).
+var del := PythonBridge.delete_script("mein_modul")
+# del.value = {ok, existed, removed[], failed[], cython_state_cleared}
+```
+
+Zwischen `execute()` (temporaer, kein Dateisystem-Zugriff) und
+`create_script()`/`call_script()` (persistent) wird strikt unterschieden -
+Details in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
+
 ### Task-API (fein-granular)
 
 ```gdscript
@@ -125,6 +176,32 @@ if submitted.is_ok():
 PythonBridge.cancel_task(task.id)
 var t2 := PythonBridge.get_task(task.id)         # Status/Result abfragen
 ```
+
+### Sync-/Invalidierungs-API (Web und Cython)
+
+Diese Methoden ruft normalerweise das Editor-Dock; sie sind public, weil
+eigene Dateischreiber sie ebenfalls brauchen (sonst laufen Python-Prozess und
+Dateisystem auseinander):
+
+```gdscript
+# Nach dem Schreiben einer Skriptdatei aufrufen. Verwirft den Registry-Cache
+# und spiegelt die Datei im Web-Export in den Pyodide-Workspace (MEMFS).
+PythonBridge.notify_script_written(script_id, path)
+
+# Vollstaendiger Speicher-Pfad: zusaetzlich Cython-Modul des Stems verwerfen
+# (sonst liefe nach .pyx -> .py das alte .so/.pyd aus sys.modules weiter) und
+# im Web die .pyx-Gegenprobe entfernen.
+PythonBridge.notify_script_saved(script_id, path)
+
+# Nach dem Loeschen: Kontexte + importiertes Modul verwerfen, im Web die
+# Dateien im MEMFS entfernen.  -> {ok, existed, removed[], failed[], ...}
+var del := PythonBridge.delete_script("rechner")
+```
+
+Im Browser laufen diese Meldungen ueber den einseitigen `file_op`-Kanal
+(`write`/`delete`) und den `invalidate`-Kanal. Ist noch keine Instanz bereit,
+werden sie gepuffert (letzte Operation pro Pfad gewinnt) und beim Wechsel nach
+`ready` nachgezogen.
 
 ### Hot Reload & Introspection
 
@@ -140,8 +217,27 @@ var schema := await PythonBridge.introspect_script("mein_skript")
 PythonBridge.script_path_for("mein_skript")        # res://python_bridge/scripts/mein_skript.py
 PythonBridge.resolve_script_path("unterordner/id") # volle Pfade erlaubt
 PythonBridge.workspace_dir()                       # res://python_bridge
+PythonBridge.scripts_dir()                         # .../scripts
+PythonBridge.wrapper_dir()                         # .../wrappers
 PythonBridge.config()                              # aktive Konfiguration
 ```
+
+### Cython (Desktop)
+
+```gdscript
+# Report: {ok, built[], skipped[], errors[], compiler, duration_s}
+# compiler = msvc | mingw32 | system | zig | none
+var rep := await PythonBridge.compile_cython("", false)
+
+# Ob ein Build noetig ist, entscheidet die Bridge per SHA-256 der .pyx gegen
+# den Stand des letzten Builds - ein geaendertes .pyx wird also automatisch
+# neu gebaut, bevor der naechste call_script importiert.
+var r := await PythonBridge.call_script("mathx", "dot", [[1.0, 2.0], [3.0, 4.0]])
+```
+
+`hot_reload_script()` auf einem `.pyx` liefert `{mode: "cython_invalidate"}`:
+Cython hat keinen exec-baren Source-Kontext, deshalb wird das kompilierte
+Modul verworfen statt Quelltext neu definiert.
 
 ### Signale
 
@@ -191,7 +287,7 @@ PythonBridgeTask.make_define(id, context, source, timeout_ms)
 
 ## Wrapper-Generierung
 
-Im Editor-Dock: Skript öffnen → „Generate wrapper“.
+Im Editor-Dock: Skript öffnen → `⋯` → „GDScript-Wrapper generieren“.
 Oder programmatisch über `PythonBridge.introspect_script()` +
 `PythonBridgeWrapperGenerator.generate(schema, script_id)`.
 

@@ -42,6 +42,11 @@ const MSG_DATA_GET := "data_get"          # materialize a DataRef handle
 const MSG_DATA_RESULT := "data_result"     # response carrying the data
 const MSG_DATA_RELEASE := "data_release"   # free a DataRef handle
 const MSG_DATA_ACK := "data_ack"           # release confirmation
+# Einseitig (ohne Ack): Kontexte/importierte Module verwerfen, nachdem ein
+# Skript geloescht oder zwischen .py/.pyx umgeschaltet wurde.
+const MSG_INVALIDATE := "invalidate"
+# Einseitig: Skriptdatei in den Python-Workspace spiegeln (Web/MEMFS).
+const MSG_FILE_OP := "file_op"
 const MSG_STATUS := "status"
 const MSG_EVENT := "event"
 const MSG_SHUTDOWN := "shutdown"

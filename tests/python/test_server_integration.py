@@ -30,6 +30,7 @@ def _optional_import(name):
         return None
 
 
+NUMPY = _optional_import("numpy")
 SCIPY = _optional_import("scipy")
 PANDAS = _optional_import("pandas")
 
@@ -232,6 +233,58 @@ class ServerIntegrationTest(unittest.TestCase):
                 self.assertEqual(data, 2)
         import asyncio
         asyncio.run(run())
+
+    def test_file_op_syncs_workspace_desktop(self):
+        """Parität zum Web-Host: derselbe einseitige file_op-Kanal muss auch
+        auf dem Desktop eine Datei anlegen und löschen können. Dort ist er
+        normalerweise ein No-op (Godot schreibt selbst), aber der Transport
+        ist derselbe - und genau das wird hier geprüft."""
+        import asyncio
+        import shutil
+
+        ws_root = os.path.join(self._tmpdir, "ws")
+        tmpdir = os.path.join(ws_root, "tmp")
+        os.makedirs(tmpdir, exist_ok=True)
+        proc, info = _start_server(tmpdir, tag="fop")
+        target = os.path.join(ws_root, "scripts", "live_mod.py")
+
+        async def run():
+            async with websockets.connect(
+                    "ws://127.0.0.1:%d" % info["port"],
+                    subprotocols=["pybridge-v2"]) as ws:
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_FILE_OP, "id": "f1",
+                    "op": "write", "path": "scripts/live_mod.py",
+                    "content": "def answer():\n    return 42\n"}))
+                # Einseitig: keine Antwort. Die naechste Task wirkt als
+                # Barriere (FIFO) - danach muss die Datei sichtbar sein.
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_TASK, "id": "t1", "command": "run",
+                    "context": "c-fileop", "source":
+                        "import live_mod\nresult = live_mod.answer()"}))
+                msg, data = await self._recv(ws)
+                self.assertEqual(msg["type"], "task_result", msg)
+                self.assertEqual(data, 42)
+                self.assertTrue(os.path.isfile(target), "file_op write fehlte")
+
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_FILE_OP, "id": "f2",
+                    "op": "delete", "path": "scripts/live_mod.py"}))
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_INVALIDATE, "id": "i1",
+                    "contexts": [], "modules": ["live_mod"]}))
+                await ws.send(protocol.build_text({
+                    "v": 2, "type": protocol.MSG_PING, "id": "p1"}))
+                msg, _ = await self._recv(ws)
+                self.assertEqual(msg["type"], protocol.MSG_PONG)
+                self.assertFalse(os.path.isfile(target), "file_op delete fehlte")
+
+        try:
+            asyncio.run(run())
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+            shutil.rmtree(ws_root, ignore_errors=True)
 
     def test_introspect(self):
         async def run():
@@ -730,6 +783,8 @@ class ServerIntegrationTest(unittest.TestCase):
         self.assertEqual(msg["status"], "ok")
         self.assertTrue(data, "funktionaler Check lieferte False: %s" % msg)
 
+    @unittest.skipUnless(NUMPY is not None,
+                         "numpy ist in dieser Testumgebung nicht installiert")
     def test_numpy_functional_desktop(self):
         self._verify_science(
             "\n".join([

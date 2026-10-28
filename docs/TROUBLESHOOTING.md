@@ -64,6 +64,40 @@ Enum-Wert. Für alles andere: Nur JSON-fähige Typen, `bytes`, `ndarray`,
 Listen/Dicts verwenden oder einen Custom-Type per
 `PythonBridgeTypeMapper.register()` ergänzen.
 
+### Cython-Build scheitert („Kein C-Compiler“, „Microsoft Visual C++ … required“)
+
+Seit 0.5.0 probiert das Build-Tool die Wege selbst durch (Windows: MSVC →
+MinGW-w64; POSIX: gcc → ziglang) und meldet erst, wenn **keiner** verfügbar
+ist. Abhilfe:
+
+- **Windows:** *Visual Studio Build Tools* mit Workload „Desktop development
+  with C++“ installieren **oder** MinGW-w64 mit `gcc` im `PATH`.
+- **Linux:** `build-essential`/`gcc` installieren.
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`).
+
+Der Report nennt das benutzte Werkzeug in `compiler` (`msvc`, `mingw32`,
+`system`, `zig`, `none`). Zwischenstände landen ausschließlich unter
+`scripts/cython_build_tmp/` und werden nach erfolgreichem Build entfernt.
+
+### `.pyx`-Aufruf liefert alten Code / `CythonModuleNotFound`
+
+- `CythonModuleNotFound`: es gibt (noch) keine kompilierte Seite. Der nächste
+  `call_script` baut automatisch — wenn ein Compiler fehlt, siehe oben.
+- **Alter Code:** Seit 0.5.0 vergleicht `call_script` den SHA-256 der `.pyx` mit
+  dem letzten Build; ein geänderter Stand wird neu gebaut und das importierte
+  Modul verworfen. Erzwingen: `⋯ → Cython kompilieren`.
+
+### Browser: im Spiel angelegtes Skript ist nicht importierbar
+
+Seit 0.5.0 spiegelt die Facade jede Datei über `file_op` in den
+Pyodide-Workspace (inkl. Puffer, falls noch keine Instanz läuft) und leert
+`__pycache__`/`sys.modules` beim Löschen. Prüfen:
+
+1. Schreibt dein Code selbst Dateien? Dann `PythonBridge.notify_script_saved(id, path)`
+   aufrufen — sonst sieht Python den alten Stand.
+2. Nach einem Instanz-Neustart wird der Puffer automatisch nachgezogen.
+3. Details: [WEB_RUNTIME.md](WEB_RUNTIME.md#dateien-zur-laufzeit-der-file_op-kanal-ab-050).
+
 ### „class_name PyBridgeX ist bereits vergeben“
 Der Wrapper-Generator prüft die globale Klassenliste und bricht sichtbar
 ab. Python-Datei umbenennen oder die kollidierende Klasse entfernen.

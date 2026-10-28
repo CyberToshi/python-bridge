@@ -43,6 +43,11 @@ MSG_DATA_GET = "data_get"          # materialize a DataRef handle
 MSG_DATA_RESULT = "data_result"     # response carrying the data
 MSG_DATA_RELEASE = "data_release"   # free a DataRef handle
 MSG_DATA_ACK = "data_ack"           # release confirmation
+# One-way: verwirft Kontexte/Module im Python-Prozess (nach Loeschen oder
+# .pyx<->.py-Umschalten). Kein Ack - die naechste Task ist per FIFO geordnet.
+MSG_INVALIDATE = "invalidate"
+# One-way: spiegelt eine Skriptdatei in den Python-Workspace (Web/MEMFS).
+MSG_FILE_OP = "file_op"
 MSG_STATUS = "status"
 MSG_EVENT = "event"
 MSG_SHUTDOWN = "shutdown"

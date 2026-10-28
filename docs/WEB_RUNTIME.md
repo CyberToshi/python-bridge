@@ -128,6 +128,42 @@ Dateisystem, Paket-Laden). Nutzer-Code sieht sie nicht. Nur wenn eine
 Bibliothek technisch nicht portierbar ist (native Extension ohne WASM-Wheel),
 entsteht eine klare Plattformmeldung statt eines stillen Fehlschlags.
 
+## Dateien zur Laufzeit: der `file_op`-Kanal (ab 0.5.0)
+
+Godot schreibt im Browser in sein eigenes `user://`-Dateisystem, Python läuft
+im Worker mit einem **eigenen** MEMFS (`/workspace`, beim Start aus
+`bridge_workspace.tar` entpackt). Bis 0.4.0 existierten Skripte, die **nach**
+dem Start entstanden, in Python schlicht nicht - `import mein_skript` schlug
+mit `ModuleNotFoundError` fehl, und ein gelöschtes Skript blieb importierbar.
+
+Seit 0.5.0 spiegelt die Facade jede Änderung als einseitige Nachricht:
+
+```json
+{"type": "file_op", "op": "write", "path": "scripts/rechner.py", "content": "def add(a, b):\n    return a + b\n"}
+{"type": "file_op", "op": "delete", "path": "scripts/rechner.py"}
+{"type": "invalidate", "contexts": ["script:..."], "modules": ["rechner"]}
+```
+
+Eigenschaften (`python_bridge/workspace_files.py`):
+
+- **Pfad-Sicherheit:** nur `scripts/`, `modules/`, `plugins/`, `packages/`;
+  `..`, absolute Pfade und Laufwerkspfade werden abgelehnt, der Workspace-Root
+  muss existieren (es wird nie irgendwo ein Baum angelegt).
+- **Atomar:** Schreiben über `.tmp` + `os.replace`; eine halb geschriebene
+  Datei ist nie importierbar. Obergrenze 8 MB pro Datei.
+- **Cache-korrekt:** `__pycache__` der Datei und `sys.modules`-Einträge der
+  betroffenen Datei werden entfernt - Löschen wirkt sofort, Schreiben liefert
+  beim nächsten `import` den neuen Stand.
+- **Reihenfolge:** `file_op` ist einseitig (kein Ack) und läuft über dieselbe
+  FIFO wie Tasks - die nächste Task sieht garantiert den neuen Zustand.
+- **Gepuffert:** Legt man ein Skript an, *bevor* die Instanz bereit ist, wird
+  die Operation gepuffert (letzte pro Pfad gewinnt) und beim Wechsel nach
+  `ready` nachgezogen.
+
+Das Dock meldet Speichern/Umbenennen/Löschen automatisch an die Bridge
+(`notify_script_saved`/`notify_script_deleted`). Eigene Dateischreiber müssen
+das ebenfalls tun, sonst sieht Python den alten Stand.
+
 ## Bewusste Browser-Grenzen
 
 - kein `OS.create_process()`, keine lokalen TCP-Sockets, kein venv/ensurepip

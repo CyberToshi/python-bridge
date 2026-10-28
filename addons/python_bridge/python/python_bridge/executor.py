@@ -21,6 +21,7 @@ import hashlib
 import importlib.util
 import io
 import re
+import sys
 import threading
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -188,6 +189,21 @@ class ScriptContext:
 
 def _hash(source):
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _cython_stem(context_id):
+    """Modulname eines ``cython:``-Kontexts (Stem der .pyx-Datei).
+
+    Beide Separator-Stile verarbeiten: Godot liefert je nach Plattform
+    ``.../scripts/x.pyx`` oder ``...\\scripts\\x.pyx``. Frueher wurde nur an
+    ``/`` getrennt - auf Windows blieb damit der ganze Pfad als "Modulname"
+    uebrig und jeder Call scheiterte mit ModuleNotFoundError.
+    """
+    text = str(context_id or "").replace("\\", "/")
+    stem = text.rsplit("/", 1)[-1]
+    if stem.endswith(".pyx"):
+        stem = stem[:-4]
+    return stem
 
 
 def _dependency_available(spec, installed=()):
@@ -389,9 +405,7 @@ class ScriptHost:
         seine oeffentlichen Funktionen in den Kontext-Namespace - damit
         verhaelt sich ein Cython-Skript beim call_script wie ein .py-Skript.
         Der Kontext gilt danach als definiert (source_hash-Marker)."""
-        stem = context_id.rsplit("/", 1)[-1]
-        if stem.endswith(".pyx"):
-            stem = stem[:-4]
+        stem = _cython_stem(context_id)
         try:
             mod = importlib.import_module(stem)
         except ImportError as exc:
@@ -457,6 +471,55 @@ class ScriptHost:
         ctx.source_hash = None
         ctx.code = None
         return self.define(context_id, source)
+
+    # ------------------------------------------------------- Invalidierung
+    def drop_context(self, context_id):
+        """Entfernt einen Kontext vollstaendig (Namespace + Compile-Cache).
+
+        Bei Cython-Kontexten (``cython:<pfad>.pyx``) wird zusaetzlich das
+        importierte Modul aus ``sys.modules`` entfernt. Ohne das wuerde nach
+        Loeschen oder Neubauen eines .pyx-Skripts immer die alte kompilierte
+        Fassung importiert - der Interpreter cached Module dauerhaft.
+
+        Rueckgabe: ``{context, dropped, module, module_dropped}``.
+        """
+        context = str(context_id or "")
+        dropped = self.contexts.pop(context, None) is not None
+        module = ""
+        module_dropped = False
+        if context.startswith("cython:"):
+            # Gleiche Stem-Ableitung wie _import_cython_module().
+            stem = _cython_stem(context)
+            if stem:
+                module = stem
+                module_dropped = sys.modules.pop(stem, None) is not None
+        importlib.invalidate_caches()
+        return {"context": context, "dropped": dropped,
+                "module": module, "module_dropped": module_dropped}
+
+    def invalidate(self, context_ids=(), module_names=()):
+        """Verwirft mehrere Kontexte/Module (nach Loeschen oder Umschalten).
+
+        Bewusst OHNE Context-Lock: ``dict.pop`` ist atomar, ein gerade
+        laufender Task haelt seine Context-Referenz selbst und laeuft
+        ungestoert zu Ende. Eine Invalidierung blockiert damit nie den
+        Event-Loop - auch nicht waehrend eines langen Jobs.
+        """
+        dropped_contexts = []
+        dropped_modules = []
+        for context_id in context_ids or ():
+            info = self.drop_context(context_id)
+            if info["dropped"]:
+                dropped_contexts.append(info["context"])
+            if info["module_dropped"] and info["module"] not in dropped_modules:
+                dropped_modules.append(info["module"])
+        for name in module_names or ():
+            module = str(name or "").strip()
+            if module and sys.modules.pop(module, None) is not None \
+                    and module not in dropped_modules:
+                dropped_modules.append(module)
+        importlib.invalidate_caches()
+        return {"contexts": dropped_contexts, "modules": dropped_modules}
 
     # ------------------------------------------------------------------ Jobs
     def execute_job(self, message):

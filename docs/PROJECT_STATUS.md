@@ -1,5 +1,8 @@
 # Python Bridge — aktueller Projektstand
 
+**Version:** 0.5.0 (maßgeblich ist `addons/python_bridge/plugin.cfg`) ·
+**verifiziert mit:** Godot 4.6- und 4.7-stable, Python 3.13
+
 Die Bridge verbindet Godot 4 mit einer oder mehreren lokalen Python-Instanzen.
 Eine Instanz besteht aus einem Python-Prozess und einem WebSocket-Kanal. Die
 Godot-Fassade verwaltet Lebenszyklus, Tasks, Fehler, Datenhandles und Editor-
@@ -7,7 +10,10 @@ Integration; Python bleibt normaler Python-Code.
 
 ## Erhaltene Kernfunktionen
 
-- Python-Dateien aus dem Editor erstellen, bearbeiten, speichern und ausführen
+- Python-Dateien aus dem Editor erstellen, bearbeiten, speichern, ausführen und
+  rückstandsfrei löschen (Quelle, Bytecode, Cython-Artefakte, Wrapper)
+- zwei Skript-Typen: temporär (`execute`, nur im Speicher) und persistent
+  (`create_script`/`call_script`, echte Dateien)
 - `run`, `call` und `define` mit Parametern, Rückgabewerten und Tracebacks
 - Prozessverwaltung mit venv-Provisionierung, Health-Checks, Restart und Shutdown
 - asynchrone WebSocket-Kommunikation und frame-synchrones Polling

@@ -3,6 +3,14 @@
 *.tmp
 *.import
 
+# Headless-Test-Arbeitsordner (tests/gdscript/test_editor_files.gd)
+.pb_test_tmp/
+
+# Lokale Test-Umgebung (nicht Teil des Projekts; nur fuer Suiten mit websockets)
+.venv-test/
+.cy_test/
+.webtest/
+
 # Python
 __pycache__/
 *.pyc

@@ -8,9 +8,11 @@ and are documented separately.
 """
 
 import base64
+import importlib
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__),
@@ -234,6 +236,94 @@ class BrowserHostTest(unittest.TestCase):
             {"v": 2, "type": "ping", "id": "j2"}), [])
         out2 = json.loads(browser_host.js_dispatch(raw_b64=base64.b64encode(frame).decode()))
         self.assertEqual(json.loads(out2[0]["text"])["id"], "j2")
+
+
+class BrowserWorkspaceMirrorTest(unittest.TestCase):
+    """file_op: der einzige Weg, wie ein im Spiel angelegtes Skript im
+    Pyodide-Workspace ankommt. Ohne ihn waere ``import <neu>`` im Browser
+    dauerhaft unmöglich und ein gelöschtes Modul bliebe importierbar."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+        os.makedirs(os.path.join(self.root, "scripts"), exist_ok=True)
+        self.host = browser_host.BrowserHost({}, workspace_root=self.root)
+        self._path_before = list(sys.path)
+        self.host.bootstrap()  # haengt <root>/scripts an sys.path (wie im Web)
+
+    def tearDown(self):
+        sys.path[:] = self._path_before
+        for key in [k for k in list(sys.modules) if k.startswith("wsmirror_")]:
+            sys.modules.pop(key, None)
+        importlib.invalidate_caches()
+        self._tmp.cleanup()
+
+    def _unique(self):
+        self._tag = "%d" % (abs(hash(self._tmp.name)) % 100000)
+        return self.mod_name
+
+    @property
+    def mod_name(self):
+        return "wsmirror_" + getattr(self, "_tag", "unknown")
+
+    def test_file_op_write_makes_module_importable(self):
+        name = self._unique()
+        replies = _dispatch(self.host, {
+            "v": 2, "type": "file_op", "id": "f1", "op": "write",
+            "path": "scripts/%s.py" % name,
+            "content": "def answer():\n    return 42\n"})
+        self.assertEqual(replies, [], "file_op ist einseitig (kein Ack)")
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "scripts", name + ".py")))
+
+        replies = _dispatch(self.host, {
+            "v": 2, "type": "task", "id": "t1", "command": "run",
+            "context": "ctx-mirror", "source":
+                "import %s\nresult = %s.answer()" % (name, name)})
+        self.assertEqual(replies[0]["type"], "task_result", replies[0])
+        self.assertEqual(replies[0]["data"], 42)
+
+    def test_file_op_delete_makes_module_unimportable(self):
+        name = self._unique()
+        _dispatch(self.host, {"v": 2, "type": "file_op", "id": "f1", "op": "write",
+                              "path": "scripts/%s.py" % name,
+                              "content": "value = 7\n"})
+        first = _dispatch(self.host, {"v": 2, "type": "task", "id": "t1", "command": "run",
+                                     "context": "c1", "source": "import %s\nresult = %s.value"
+                                     % (name, name)})
+        self.assertEqual(first[0]["data"], 7)
+        self.assertIn(name, sys.modules)
+
+        _dispatch(self.host, {"v": 2, "type": "file_op", "id": "f2", "op": "delete",
+                              "path": "scripts/%s.py" % name})
+        # Der Worker-Cache muss mitgehen - sonst liefe das geloeschte Modul weiter.
+        self.assertNotIn(name, sys.modules)
+        second = _dispatch(self.host, {"v": 2, "type": "task", "id": "t2", "command": "run",
+                                       "context": "c2", "source": "import %s\nresult = 1" % name})
+        self.assertEqual(second[0]["type"], "task_error")
+
+    def test_file_op_with_bad_path_does_not_crash_worker(self):
+        self.assertEqual(_dispatch(self.host, {
+            "v": 2, "type": "file_op", "id": "f1", "op": "write",
+            "path": "../outside.py", "content": "x"}), [])
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.root),
+                                                     "outside.py")))
+        # Host bleibt benutzbar
+        self.assertEqual(_dispatch(self.host, {"v": 2, "type": "ping", "id": "p"})[0]["type"],
+                         "pong")
+
+    def test_invalidate_drops_context_without_ack(self):
+        src = "def add(a, b):\n    return a + b\n"
+        first = _dispatch(self.host, {"v": 2, "type": "task", "id": "t1", "command": "call",
+                                     "context": "ctx-inv", "source": src,
+                                     "function": "add", "data": {"args": [1, 2]}})
+        self.assertEqual(first[0]["data"], 3)
+        self.assertEqual(_dispatch(self.host, {"v": 2, "type": "invalidate", "id": "i1",
+                                              "contexts": ["ctx-inv"], "modules": []}), [])
+        # Ohne Source und ohne Kontext: strukturierter Fehler statt Crash
+        second = _dispatch(self.host, {"v": 2, "type": "task", "id": "t2", "command": "call",
+                                       "context": "ctx-inv", "function": "add",
+                                       "data": {"args": [1, 2]}})
+        self.assertEqual(second[0]["type"], "task_error")
 
 
 if __name__ == "__main__":

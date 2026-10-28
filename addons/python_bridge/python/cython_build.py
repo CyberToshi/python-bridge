@@ -11,10 +11,14 @@ Verhalten:
     uebersprungen (Start bleibt schnell), geaenderte inkrementell ueber
     setuptools ``build_ext --inplace`` kompiliert (Cython nutzt die
     Timestamp-Logik von distutils fuer .c/.o).
-  - Compiler-Kette: bevorzugt der System-Compiler (gcc/cc bzw. MSVC). Wenn
-    keiner gefunden wird, Fallback auf das pip-Paket ``ziglang`` (kompletter
-    C-Compiler als Wheel, kein System-Setup). Fehlt eine Komponente, ist das
-    ein strukturierter Fehler mit Installations-Hinweis - kein Crash.
+  - Compiler-Kette (pro Plattform, in dieser Reihenfolge ausprobiert):
+      * Windows: MSVC (setuptools-Default) -> mingw32 (falls ``gcc`` im PATH).
+        ``ziglang`` hilft dort NICHT: setuptools benutzt auf Windows immer
+        den MSVC-Treiber und ignoriert ``CC``/``LDSHARED``.
+      * POSIX: System-CC -> ``ziglang`` (Wheel-Compiler, kein System-Setup).
+    Jede Strategie wird beim ersten Fehler verworfen, die naechste probiert;
+    erst wenn alle scheitern, gibt es einen strukturierten Fehler mit
+    Installations-Hinweis - kein Crash.
   - Gibt IMMER einen JSON-Report auf stdout aus (letzte Zeile), auch bei
     Fehlerfaellen einzelner Dateien. Exit-Code 0, solange das Tool selbst
     lief; ok=false im Report signalisiert Build-Fehler.
@@ -36,6 +40,7 @@ import time
 from pathlib import Path
 
 STATE_FILE = ".cython_state.json"
+TMP_DIR = "cython_build_tmp"
 
 
 def _report(payload: dict) -> None:
@@ -81,48 +86,108 @@ def _pip_install(mods: list) -> tuple[bool, str]:
         return False, "%s: %s" % (type(exc).__name__, exc)
 
 
-def _compiler_env() -> tuple[dict, str, list]:
-    """Env fuer subprocess + Beschreibung + fehlende Komponenten.
+# Marker, an denen sich ein Compiler-/Linker-Problem von einem Fehler IN der
+# .pyx unterscheiden laesst. Nur dann lohnt die naechste Strategie.
+_COMPILER_ERROR_MARKERS = (
+    "microsoft visual c++", "vcvarsall", "command 'cl.exe'",
+    "command 'gcc' failed", "gcc: not found", "gcc: command not found",
+    "clang: not found", "clang: command not found",
+    "command 'cc' failed", "cc: not found", "no such file or directory: 'gcc'",
+    "cannot find -lpython", "undefined reference", "unable to find a c",
+    "linker command failed", "fatal error",
+)
 
-    Reihenfolge: System-CC (distutils-Default) -> ziglang-Fallback."""
+
+def _looks_like_compiler_error(message: str) -> bool:
+    text = (message or "").lower()
+    return any(marker in text for marker in _COMPILER_ERROR_MARKERS)
+
+
+def _build_packages_missing() -> list[str]:
+    """Fehlende Python-Build-Pakete (Cython/setuptools) in DIESER venv."""
     missing = []
     for mod in ("Cython", "setuptools"):
         try:
             __import__(mod)
         except ImportError:
             missing.append(mod)
-    if missing:
-        return {}, "none", missing
+    return missing
 
-    if shutil.which("gcc") or shutil.which("cc") or shutil.which("clang"):
-        return {}, "system", []  # distutils findet den Compiler selbst
 
+def _zig_strategy() -> dict | None:
+    """``ziglang`` als kompletter C-Compiler (nur POSIX sinnvoll).
+
+    ``zig cc`` kennt exotische Distro-Linker-Flags (-Bsymbolic-functions)
+    nicht; deshalb werden CC und LDSHARED vollstaendig auf zig gesetzt.
+    Auf Windows ignoriert setuptools diese Variablen (MSVC-Treiber), dort ist
+    die Strategie nutzlos - siehe ``_candidate_strategies()``.
+    """
     try:
         import ziglang  # noqa: F401
     except ImportError:
-        missing.append("ziglang")
-        return {}, "none", missing
-
-    # zig cc kennt exotische Distro-Linker-Flags (-Bsymbolic-functions) nicht;
-    # wir setzen CC/LDSHARED vollstaendig auf zig (Beweis: siehe Tests).
+        return None
     zig_cc = f'"{sys.executable}" -m ziglang cc'
     return {
-        "CC": zig_cc,
-        "LDSHARED": zig_cc + " -shared",
-    }, "zig", []
+        "name": "zig",
+        "args": [],
+        "env": {"CC": zig_cc, "LDSHARED": zig_cc + " -shared"},
+    }
 
 
-def _build_one(scripts_dir: Path, stem: str, env: dict) -> tuple[bool, str]:
-    """Ein Modul kompilieren (setup.py-Fallback in(temp)-Datei)."""
+def _candidate_strategies() -> list[dict]:
+    """Compiler-Strategien in Ausprobier-Reihenfolge (leer = keine moeglich).
+
+    Windows: MSVC (setuptools findet es selbst) -> mingw32 bei ``gcc`` im PATH.
+    Ohne beides ist kein Build moeglich; ``ziglang`` wird dort bewusst nicht
+    angeboten, weil setuptools den MSVC-Treiber erzwingt.
+    POSIX: System-CC -> zig-Fallback.
+    """
+    strategies: list[dict] = []
+    if os.name == "nt":
+        strategies.append({"name": "msvc", "args": [], "env": {}})
+        if shutil.which("gcc"):
+            strategies.append({"name": "mingw32", "args": ["--compiler=mingw32"],
+                               "env": {}})
+        return strategies
+
+    if shutil.which("gcc") or shutil.which("cc") or shutil.which("clang"):
+        strategies.append({"name": "system", "args": [], "env": {}})
+    zig = _zig_strategy()
+    if zig is not None:
+        strategies.append(zig)
+    return strategies
+
+
+def _compiler_hint() -> str:
+    """Handlungsfaehiger Hinweis, wenn gar kein Compiler verfuegbar ist."""
+    if os.name == "nt":
+        return ("Auf Windows braucht der Cython-Build einen C-Compiler: "
+                "entweder die Visual Studio Build Tools (Workload "
+                "\"Desktop development with C++\") oder MinGW-w64 mit "
+                "``gcc`` im PATH.")
+    return ("Es wurde kein C-Compiler gefunden. Installiere gcc/clang "
+            "(oder lasse das Tool ``ziglang`` nachinstallieren).")
+
+
+def _build_one(scripts_dir: Path, stem: str, strategy: dict) -> tuple[bool, str]:
+    """Ein Modul kompilieren (Setup-Skript in temporaere Datei im Ordner)."""
     setup_py = scripts_dir / "cython_setup.py"
     setup_py.write_text(
         "from setuptools import setup\n"
         "from Cython.Build import cythonize\n"
-        "setup(ext_modules=cythonize(%r, language_level=3))\n" % (stem + ".pyx"),
+        "setup(ext_modules=cythonize(%r, language_level=3, compiler_directives="
+        "{'language_level': 3}))\n" % (stem + ".pyx"),
         "utf-8",
     )
-    cmd = [sys.executable, str(setup_py), "build_ext", "--inplace", "--build-lib",
-           str(scripts_dir / "cython_build_tmp")]
+    # --inplace legt das fertige Modul neben die .pyx (dort muss es liegen,
+    # damit scripts/ auf sys.path es importiert). Temp- und Lib-Ordner wandern
+    # nach cython_build_tmp: sonst bleibt ein "build/"-Baum im Skriptordner
+    # liegen, den der Export nicht kennt.
+    tmp_root = scripts_dir / TMP_DIR
+    cmd = [sys.executable, str(setup_py), "build_ext", "--inplace",
+           "--build-temp", str(tmp_root / ("temp_" + stem)),
+           "--build-lib", str(tmp_root / ("lib_" + stem))] + list(strategy.get("args") or [])
+    env = strategy.get("env") or {}
     try:
         proc = subprocess.run(
             cmd, cwd=str(scripts_dir), env={**os.environ, **env},
@@ -130,11 +195,17 @@ def _build_one(scripts_dir: Path, stem: str, env: dict) -> tuple[bool, str]:
         if proc.returncode != 0:
             tail = (proc.stdout or "") + (proc.stderr or "")
             return False, tail.strip()[-2000:] or "build_ext failed (rc=%d)" % proc.returncode
+        # Temp-/Lib-Baeume sind reine Zwischenstaende: das Modul liegt per
+        # --inplace neben der .pyx. Aufraeumen haelt den Skriptordner leer.
+        shutil.rmtree(tmp_root / ("temp_" + stem), ignore_errors=True)
+        shutil.rmtree(tmp_root / ("lib_" + stem), ignore_errors=True)
         return True, ""
     except subprocess.TimeoutExpired:
-        return False, "Build-Timeout (600 s) bei '%s'" % stem
+        # Timeout ist kein Compiler-Problem: alle weiteren Strategien
+        # wuerden genauso haengen.
+        return False, "Build-Timeout (600 s) bei '%s' [%s]" % (stem, strategy.get("name"))
     except Exception as exc:  # noqa: BLE001
-        return False, "%s: %s" % (type(exc).__name__, exc)
+        return False, "%s: %s [%s]" % (type(exc).__name__, exc, strategy.get("name"))
     finally:
         try:
             setup_py.unlink()
@@ -167,7 +238,7 @@ def main() -> int:
                     help="fehlende Build-Pakete NICHT automatisch installieren")
     args = ap.parse_args()
 
-    scripts_dir = Path(args.stems).resolve() if False else Path(args.scripts_dir).resolve()
+    scripts_dir = Path(args.scripts_dir).resolve()
     if not scripts_dir.is_dir():
         _emit({"ok": False, "error": "scripts-dir fehlt: %s" % scripts_dir,
                "built": [], "skipped": [], "errors": [], "compiler": "none", "duration_s": 0},
@@ -183,33 +254,52 @@ def main() -> int:
 
     state = _load_state(scripts_dir)
     t0 = time.time()
-    built, skipped, errors, compiler = [], [], [], "-"
-    env = {}
+    built, skipped, errors = [], [], []
+    installed: list[str] = []
+    strategies: list[dict] = []
+    compiler = "-"
 
     if targets:
-        env, compiler, missing = _compiler_env()
+        # Self-Provisioning: fehlende Build-Pakete (Cython, setuptools)
+        # automatisch in DIESE venv installieren - der erste .pyx-Build soll
+        # ohne manuelle Vorbereitung laufen.
+        missing = _build_packages_missing()
+        if missing and not args.no_install:
+            for m in list(missing):
+                ok, _log = _pip_install([m])
+                if ok:
+                    installed.append(m)
+                    missing.remove(m)
         if missing:
-            # Self-Provisioning: fehlende Build-Pakete (cython, setuptools,
-            # ziglang-Fallback) automatisch in DIESE venv installieren -
-            # der erste .pyx-Build soll ohne manuelle Vorbereitung laufen.
-            installed: list[str] = []
-            if not args.no_install:
-                for m in list(missing):
-                    ok, _log = _pip_install([m])
-                    if ok:
-                        installed.append(m)
-                        missing.remove(m)
-            env, compiler, missing = _compiler_env() if not missing else ({}, "none", missing)
-            if missing:
-                hint = "pip install " + " ".join(missing) + "  (in der Bridge-venv)"
-                for t in targets:
-                    errors.append({"file": t.name, "message":
-                                   "Cython-Build-Komponenten fehlen: %s. Abhilfe: %s"
-                                   % (", ".join(missing), hint)})
-                _emit({"ok": False, "built": [], "skipped": [], "errors": errors,
-                       "compiler": "none", "duration_s": round(time.time() - t0, 2),
-                       "missing": missing, "self_installed": installed}, args.report)
-                return 0
+            hint = "pip install " + " ".join(missing) + "  (in der Bridge-venv)"
+            for t in targets:
+                errors.append({"file": t.name, "message":
+                               "Cython-Build-Komponenten fehlen: %s. Abhilfe: %s"
+                               % (", ".join(missing), hint)})
+            _emit({"ok": False, "built": [], "skipped": [], "errors": errors,
+                   "compiler": "none", "duration_s": round(time.time() - t0, 2),
+                   "missing": missing, "self_installed": installed}, args.report)
+            return 0
+
+        strategies = _candidate_strategies()
+        if not strategies and os.name != "nt" and not args.no_install:
+            # POSIX ohne System-CC: ziglang ist dort ein vollwertiger Ersatz
+            # (Wheel mit clang/lld). Auf Windows bewusst nicht - setuptools
+            # erzwingt dort den MSVC-Treiber und ignoriert CC/LDSHARED.
+            ok_install, _log = _pip_install(["ziglang"])
+            if ok_install:
+                installed.append("ziglang")
+                strategies = _candidate_strategies()
+        if not strategies:
+            hint = _compiler_hint()
+            for t in targets:
+                errors.append({"file": t.name,
+                               "message": "Kein C-Compiler verfuegbar. " + hint})
+            _emit({"ok": False, "built": [], "skipped": [], "errors": errors,
+                   "compiler": "none", "duration_s": round(time.time() - t0, 2),
+                   "missing": [], "self_installed": installed}, args.report)
+            return 0
+        compiler = strategies[0]["name"]
 
     for pyx in targets:
         stem = pyx.stem
@@ -217,12 +307,26 @@ def main() -> int:
         if not args.force and state.get(stem) == h and _output_present(scripts_dir, stem):
             skipped.append(stem)
             continue
-        ok, msg = _build_one(scripts_dir, stem, env)
+        attempts: list[str] = []
+        ok = False
+        for strategy in strategies:
+            ok, msg = _build_one(scripts_dir, stem, strategy)
+            if ok:
+                compiler = strategy["name"]
+                break
+            attempts.append("%s: %s" % (strategy["name"], msg))
+            # Nur bei einem Compiler-Problem die naechste Strategie probieren.
+            # Ein Cython-/Syntax-Fehler in der .pyx scheitert ueberall gleich.
+            if not _looks_like_compiler_error(msg):
+                break
         if ok:
             state[stem] = h
             built.append(stem)
         else:
-            errors.append({"file": pyx.name, "message": msg})
+            entry = {"file": pyx.name, "message": "\n".join(attempts)[-2000:]}
+            if attempts and not ok:
+                entry["hint"] = _compiler_hint()
+            errors.append(entry)
 
     if targets:
         _save_state(scripts_dir, state)

@@ -127,8 +127,19 @@ static func _coerce(key: String, value: Variant, fallback: Variant) -> Variant:
 		"dependencies":
 			if value is Array or value is PackedStringArray:
 				return PackedStringArray(value)
+			# Projekt-Einstellungen speichern Komma-Listen als String (ein
+			# editierbares Feld statt eines unhandlichen Arrays).
+			if value is String:
+				return split_list(value)
 			return fallback
-		"workspace_dir", "python_executable", "wrapper_dir", "hot_reload_mode", "retry_policy", "web_worker_url", "web_pyodide_dir", "web_cdn_url", "web_bundle_url", "web_packages", "web_tag":
+		"workspace_dir", "wrapper_dir":
+			# Leerzeichen/leere Eingabe (z. B. geleertes Feld im
+			# Einstellungs-Dialog) darf den Workspace nicht auf "" setzen -
+			# sonst landeten Skripte in "/scripts" statt im Projekt.
+			if value == null or str(value).strip_edges() == "":
+				return fallback
+			return str(value).strip_edges()
+		"python_executable", "hot_reload_mode", "retry_policy", "web_worker_url", "web_pyodide_dir", "web_cdn_url", "web_bundle_url", "web_packages", "web_tag":
 			return str(value) if value != null else fallback
 		"autostart":
 			return bool(value)
@@ -137,6 +148,123 @@ static func _coerce(key: String, value: Variant, fallback: Variant) -> Variant:
 			if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT:
 				return int(value)
 			return value
+
+# ------------------------------------------------------------------ Projekt-Einstellungen
+## Praefix aller Einstellungen, die im Editor unter
+## "Projekt > Projekteinstellungen" erscheinen (Abschnitt "Python Bridge").
+const SETTINGS_SECTION := "python_bridge"
+
+## Einzige Quelle der Wahrheit fuer die Einstellungs-Oberflaeche: Das Plugin
+## registriert GENAU diese Eintraege, die Facade liest GENAU diese, und der
+## Einstellungs-Dialog im Dock baut sich aus derselben Liste. Dadurch koennen
+## UI, Registrierung und Lesepfad nie auseinanderlaufen.
+##
+## Rueckgabe: Array von
+##   {path, key, type, default, hint (PropertyHint), hint_string, label}
+static func project_setting_defs() -> Array:
+	return [
+		{
+			"path": SETTINGS_SECTION + "/general/autostart", "key": "autostart",
+			"type": TYPE_BOOL, "default": false, "hint": PROPERTY_HINT_NONE,
+			"hint_string": "", "label": "Python beim Start des Editors/Spiels automatisch starten",
+		},
+		{
+			"path": SETTINGS_SECTION + "/general/workspace_dir", "key": "workspace_dir",
+			"type": TYPE_STRING, "default": DEFAULT_WORKSPACE_DIR,
+			"hint": PROPERTY_HINT_DIR, "hint_string": "",
+			"label": "Workspace-Ordner (scripts/, wrappers/, tmp/) – leer = Standard",
+		},
+		{
+			"path": SETTINGS_SECTION + "/general/python_executable", "key": "python_executable",
+			"type": TYPE_STRING, "default": "", "hint": PROPERTY_HINT_FILE,
+			"hint_string": "*.exe,*.bat,python*,python3*",
+			"label": "Python-Interpreter (leer = Bridge legt eigene venv an)",
+		},
+		{
+			"path": SETTINGS_SECTION + "/general/dependencies", "key": "dependencies",
+			"type": TYPE_STRING, "default": "", "hint": PROPERTY_HINT_NONE,
+			"hint_string": "",
+			"label": "Python-Pakete (Komma-getrennt, z. B. numpy,scipy>=1.10)",
+		},
+		{
+			"path": SETTINGS_SECTION + "/general/hot_reload_mode", "key": "hot_reload_mode",
+			"type": TYPE_STRING, "default": "reload_context",
+			"hint": PROPERTY_HINT_ENUM,
+			"hint_string": "none,reload_context,restart_instance",
+			"label": "Hot-Reload-Verhalten",
+		},
+		{
+			"path": SETTINGS_SECTION + "/general/auto_generate_wrappers",
+			"key": "auto_generate_wrappers", "type": TYPE_BOOL, "default": false,
+			"hint": PROPERTY_HINT_NONE, "hint_string": "",
+			"label": "GDScript-Wrapper automatisch erzeugen",
+		},
+		{
+			"path": SETTINGS_SECTION + "/web/packages", "key": "web_packages",
+			"type": TYPE_STRING, "default": "numpy,scipy,pandas",
+			"hint": PROPERTY_HINT_NONE, "hint_string": "",
+			"label": "Web-Export: Pyodide-Pakete (Komma-getrennt)",
+		},
+	]
+
+## Zerlegt eine Komma-/Semikolon-Liste ("numpy, scipy>=1.10") in Specs.
+static func split_list(text: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	for part in text.replace(";", ",").split(",", false):
+		var spec := part.strip_edges()
+		if spec != "":
+			out.append(spec)
+	return out
+
+## Liest die registrierten Projekt-Einstellungen direkt aus ProjectSettings.
+## Wird von der Facade beim Start benutzt; im Export stehen die Werte aus
+## project.godot zur Verfuegung, im Editor zusaetzlich die Live-Aenderungen.
+static func read_project_values() -> Dictionary:
+	var out: Dictionary = {}
+	for def in project_setting_defs():
+		var path := str(def["path"])
+		if ProjectSettings.has_setting(path):
+			var value: Variant = ProjectSettings.get_setting(path)
+			if value != null:
+				out[str(def["key"])] = value
+	return out
+
+## Liest die Werte der Projekt-Einstellungen als Dictionary {key: value}.
+## Nicht gesetzte Eintraege fehlen im Ergebnis (kein Ueberschreiben der
+## Defaults mit Nullen). In Tests ohne ProjectSettings nutzbar, wenn
+## `source` ein Dictionary ist.
+static func project_values(source: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for def in project_setting_defs():
+		var path := str(def["path"])
+		if not source.has(path):
+			continue
+		var value: Variant = source[path]
+		if value == null:
+			continue
+		out[str(def["key"])] = value
+	return out
+
+## Baut die effektive Konfiguration: defaults -> Projekt-Einstellungen ->
+## config.json. Spaetere Quellen gewinnen. Ein explizites configure()
+## ersetzt das Ergebnis vollstaendig (dokumentierte Praezedenz).
+static func collect(project: Dictionary = {}, file_cfg: Dictionary = {}) -> Dictionary:
+	var merged := defaults()
+	# Projekt-Werte duerfen in beiden Formen kommen: {key: wert} (fertig
+	# abgebildet) oder als roher ProjectSettings-Dump
+	# {"python_bridge/general/autostart": wert}. Pfade werden abgebildet.
+	var project_map: Dictionary = project
+	for key in project:
+		if str(key).contains("/"):
+			project_map = project_values(project)
+			break
+	for source in [project_map, file_cfg]:
+		if not (source is Dictionary):
+			continue
+		for key in source:
+			if source[key] != null:
+				merged[str(key)] = source[key]
+	return normalize(merged)
 
 ## True when the given string is one of the supported hot reload modes.
 static func is_valid_reload_mode(mode: String) -> bool:

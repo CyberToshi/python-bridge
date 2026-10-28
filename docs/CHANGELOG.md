@@ -1,6 +1,136 @@
 # Changelog
 
-## v0.3.3 (current)
+## v0.5.0 (current)
+
+### Web und Cython tun jetzt wirklich, was die Doku verspricht
+
+- **Web: Skripte kommen im Pyodide-Workspace an.** Neuer einseitiger
+  `file_op`-Kanal (`addons/python_bridge/python/python_bridge/workspace_files.py`)
+  spiegelt Schreib-/Loeschvorgaenge aus Godot in das MEMFS des Workers -
+  vorher existierte ein zur Laufzeit angelegtes Skript dort nie (`import x`
+  schlug fehl), und ein geloeschtes blieb importierbar. Pfade sind auf die
+  Workspace-Ordner beschraenkt (`..`, absolute Pfade und fremde Ordner werden
+  abgelehnt), Schreibvorgaenge sind atomar, `__pycache__` wird mit entfernt,
+  und `sys.modules` wird fuer die betroffene Datei geleert.
+- **Keine verlorenen Web-Schreibvorgaenge**: Ist noch keine Instanz bereit,
+  werden Datei-Ops gepuffert (pro Pfad gewinnt die letzte Operation, FIFO fuer
+  den Rest, harte Obergrenze) und beim Wechsel nach `ready` nachgezogen.
+- **Der Editor meldet Speichervorgaenge an die Bridge**: neues
+  `notify_script_saved()` (Cache, Web-Spiegelung, Cython-Modul-Invalidierung).
+  Das Dock schreibt direkt ueber `script_store` - ohne diese Meldung hätte
+  Python im Browser und bei Cython den alten Stand gesehen. Umbenennen
+  invalidiert jetzt auch den alten Namen (`notify_script_deleted`).
+- **Cython-Build auf Windows repariert.** `cython_build.py` probiert die
+  Compiler-Wege jetzt in der Reihenfolge, in der sie funktionieren:
+  Windows MSVC -> MinGW-w64 (`--compiler=mingw32`, falls `gcc` im PATH);
+  POSIX System-CC -> `ziglang`. Vorher wurde auf Windows `ziglang`
+  "angeboten", das setuptools dort aber ignoriert (MSVC-Treiber) - der Build
+  scheiterte mit "Microsoft Visual C++ 14.0 or greater is required".
+  Build-Zwischenstaende landen komplett in `cython_build_tmp` (kein `build/`
+  mehr im Skriptordner) und werden nach Erfolg entfernt.
+- **Cython-Aufrufe auf Windows repariert**: Der Modulname wurde nur an `/`
+  getrennt, bei `cython:C:\...\mathx.pyx` blieb der ganze Pfad als
+  "Modulname" uebrig -> jeder `call_script` endete in `ModuleNotFoundError`.
+  Gemeinsame, plattformfeste Stem-Ableitung in `executor.py`.
+- **Geaenderte `.pyx` wird erkannt**: `call_script` vergleicht den SHA-256 der
+  Quelle mit dem letzten Build und baut inkrementell nach, statt still den
+  alten kompilierten Stand auszufuehren. Hot Reload auf `.pyx` verwirft das
+  Modul (`mode: cython_invalidate`) statt Cython-Quelltext zu exec-en.
+- **Speichern als `.py` raeumt Cython-Reste ab**: `.c`, `.so`/`.pyd`,
+  `cython_build_tmp`-Reste und der Build-Hash verschwinden (sonst blieb ein
+  veraltetes Modul importierbar). Das Gegenstueck (`.py` <-> `.pyx`) wird erst
+  **nach** erfolgreichem Schreiben entfernt - ein fehlgeschlagener Save kostet
+  die bestehende Datei nicht mehr.
+- **Sortieren von `.pyx`-Importen**: der Desktop-Server haengt `scripts/`
+  jetzt auch dann an `sys.path`, wenn der Ordner erst zur Laufzeit entsteht.
+
+### Einstellungen sind auffindbar (automatisch ODER manuell)
+
+- **Projekt > Projekteinstellungen > Python Bridge** mit 7 Feldern
+  (`autostart`, `workspace_dir`, `python_executable`, `dependencies`,
+  `hot_reload_mode`, `auto_generate_wrappers`, `web_packages`), inklusive
+  Datei-/Ordner-Picker und Auswahlliste. Registrierung und Lesepfad stammen aus
+  derselben Quelle (`PythonBridgeConfig.project_setting_defs()`).
+- **Dock: `...` -> Einstellungen ...** mit denselben Feldern und dem Knopf
+  "Speichern & neu starten" - Aenderungen greifen sofort statt beim naechsten
+  Projekstart.
+- **Neues Werkzeuge-Menue** (`Projekt > Werkzeuge`): Dock anzeigen, Neue
+  Datei, Einstellungen, Instanz starten/stoppen, Cython kompilieren. Vorher
+  war alles nur ueber den Dock-Tab erreichbar.
+- **Optionale `config.json`** im Workspace fuer Teams/CI. Praezedenz:
+  Defaults -> Projekt-Einstellungen -> `config.json` -> `configure()`.
+  `reload_config()` liest die Kette neu, ohne eine laufende Instanz zu beenden.
+- **`python_executable` = System-Python** wird als dokumentierter Weg
+  unterstuetzt (venv wird uebersprungen, `websockets` muss vorhanden sein).
+
+### Tests
+
+- Neu: `tests/python/test_workspace_files.py` (Pfad-Sicherheit, atomares
+  Schreiben, Bytecode-/Modul-Cache), `file_op`-Tests im Browser-Host und im
+  echten Desktop-Server, `tests/gdscript/test_bridge_sync.gd` (Puffer-Logik),
+  `tests/gdscript/test_config_settings.gd` (Praezedenz, Typ-Coercion).
+- `tests/live_cython_e2e.py` ist jetzt portabel (Windows/Linux/macOS): baut
+  frisch, startet einen echten Server und prueft Call, Persistenz,
+  Fehlerpfad und inkrementelles Skip - vorher mit Linux-Hardcodings
+  unbrauchbar.
+- Zahlen: 205 Python-Tests (28 skipped ohne optionale Pakete), 384
+  GDScript-Assertions, 17 Editor-Verifikationen, 9 Live-Cython-Checks,
+  23 Checks in echter Pyodide-Runtime.
+- `tools/test_web_runtime.mjs` lief unter Windows gar nicht (Node verlangt
+  `file://`-URLs für absolute Modulpfade) - behoben. Der Test prüft jetzt auch
+  den `file_op`-Kanal in echter Pyodide-Runtime: schreiben → importierbar,
+  löschen → nicht mehr importierbar, Pfad-Ausbruch abgelehnt, Worker lebt
+  weiter.
+- **Neu:** `PythonBridge.restart_instance()` (Stop abwarten, dann Start) -
+  direktes `stop_instance()` + `start_instance()` scheitert am
+  `stopping`-Zustand. Der Knopf „Speichern & neu starten“ nutzt ihn.
+
+## v0.4.0
+
+### Editor-Dock: Redesign, zuverlaessiges Speichern, rueckstandsfreies Loeschen
+
+- **Stabile Tabs** ueber `TabContainer`: ein `CodeEdit` pro Tab (eigene
+  Undo-Historie + Highlighter), `get_index()` statt paralleler Index-Listen,
+  Drag & Drop, Close-Button am aktiven Tab, Mittelklick, `Strg+W`.
+  Der Editor-Hot-Reload des Dock-Skripts stellt offene Tabs inklusive Text
+  wieder her (`_capture_tabs`/`_restore_tabs`) - vorher gingen sie verloren.
+- **Syntax-Highlighting korrigiert**: Jede Region setzt nach ihrem Ende
+  explizit die Default-Farbe (vorher blieb der Rest der Zeile nach Strings,
+  Zahlen und Kommentaren in der Token-Farbe), Spalte 0 ist immer explizit
+  Default. Mehrzeilige Docstrings werden pro Zeile gecacht statt pro Aufruf
+  neu gescannt (`invalidate()` bei Textaenderung). Zahlen (Basen, Exponent,
+  `j`), Decorator-Dotted-Names und Aufrufnamen werden korrekt behandelt.
+- **Oeffnen/Speichern fehlerfrei**: neue Dateischicht
+  `editor/script_store.gd` (rein, ohne Bridge-Abhaengigkeit) unterscheidet
+  leere Datei von Lesefehler, normalisiert CRLF/BOM und meldet Schreibfehler
+  strukturiert. Ein Skript existiert nie gleichzeitig als `.py` und `.pyx`
+  (Umschalten entfernt das Gegenstueck sichtbar).
+- **Temporaere Skripte im Dock**: Scratch-Tabs leben nur im Speicher und
+  laufen ueber `PythonBridge.execute()`; `Strg+S` macht daraus eine Datei.
+- **Rueckstandsfreies Loeschen**: `PythonBridge.delete_script(id)` (Kern:
+  `core/script_files.gd`) entfernt Quelle, `.py.uid`, `__pycache__`/`.pyc`,
+  `.c`, `.so`/`.pyd`, `.o`/`.obj` unter `cython_build_tmp`, den Eintrag in
+  `.cython_state.json` und den generierten Wrapper samt `.uid`; leere
+  Hilfsordner werden mit entfernt. Rueckgabe: `{ok, existed, removed[],
+  failed[], cython_state_cleared}`. Im Dock: Rechtsklick -> Loeschen (mit
+  Bestaetigung, schliesst den offenen Tab).
+- **Aufraeumen im Dock**: Umbenennen, Filter, automatische Listen-
+  Aktualisierung, externe Aenderungen werden nur bei nicht-dirty Tabs
+  nachgeladen, Shortcuts `Strg+N`/`Strg+S`/`Strg+W`/`Strg+Enter` (nur bei Fokus im
+  Dock), Instanz startet beim Ausfuehren bei Bedarf automatisch.
+- **Neue API**: `delete_script`, `list_scripts`, `validate_script_id`,
+  `scripts_dir`, `wrapper_dir`.
+- **Tests**: neue Headless-Suite `test_editor_files.gd` (Dateischicht,
+  Artefakt-Loeschung, Umbenennen, Highlighter inkl. Farb-Reset und Docstring-
+  Zustand); `verify_editor.gd` prueft jetzt das echte Dock (Scratch-Tab,
+  Highlighter, Reload-Wiederherstellung, Speichern und Loeschen ueber das
+  Dock). Stand: 273 Assertions gruen (vorher 193).
+- **Doku**: neue verbindliche Anleitung `docs/ERSTE_SCHRITTE.md` (von Null,
+  beide Skript-Typen, Loeschtabelle, Versionsklarheit) und `docs/README.md`
+  als Index mit Status-/Autoritaets-Tabelle; README und API-Referenz auf
+  0.4.0 gezogen.
+
+## v0.3.3
 
 ### Fixed: __bridge_deps__-Kette
 

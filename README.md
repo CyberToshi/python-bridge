@@ -1,5 +1,7 @@
 # Python Bridge für Godot 4
 
+**Version 0.5.0** · verifiziert mit Godot 4.6- und 4.7-stable sowie Python 3.13
+
 Eine allgemeine, production-orientierte Python-Bridge: Python-Code wird direkt
 aus Godot heraus geschrieben, verwaltet und ausgeführt. Python bleibt echter
 Python-Code; Godot bleibt der kontrollierende Host. Die Bridge übernimmt die
@@ -16,43 +18,91 @@ Pyodide (WebAssembly)**.
 > **Invariante:** Python wartet nie auf einen Godot-Frame, und Godot wartet
 > nie auf Python.
 
+## Einstieg
+
+➡️ **[docs/ERSTE_SCHRITTE.md](docs/ERSTE_SCHRITTE.md)** — die verbindliche
+Anleitung von Null auf: Voraussetzungen, Installation in 5 Schritten, beide
+Skript-Typen, Editor-Dock, rückstandsfreies Löschen, Konfiguration,
+Fehlerbehebung, Versionsklarheit.
+
+Ein Überblick über alle Dokumente (inklusive klar markierter historischer
+Dateien): **[docs/README.md](docs/README.md)**.
+
+## Zwei Arten von Python-Code
+
+| | Temporär | Persistent |
+|---|---|---|
+| Aufruf | `await PythonBridge.execute(code, input)` | `execute_script` / `call_script` / `define_script` |
+| Ablage | nur im Speicher (String, Scratch-Tab im Dock) | echte Datei `res://python_bridge/scripts/<id>.py` |
+| Kontext | frisch pro Aufruf | bleibt pro Datei (Modul-State überlebt) |
+
+```gdscript
+func _ready() -> void:
+    await PythonBridge.start_instance("default")          # erster Start: venv, 1-3 min
+    await PythonBridge.execute("result = 6 * 7")          # temporär -> 42
+
+    PythonBridge.create_script("rechner", "def calc(a, b):\n    return a * b\n")
+    var r := await PythonBridge.call_script("rechner", "calc", [6, 7])
+    print(r.value)                                        # 42
+
+    # Aufräumen: entfernt Quelle, .c, .so/.pyd, .pyc, Build-Zustand und Wrapper
+    PythonBridge.delete_script("rechner")
+```
+
 ## Inhalt
 
 ```
 addons/python_bridge/   das Add-on (Kern + Editor + Python-Paket + Web-Worker)
-core/                   TaskManager, Scheduler, Instanzen, Protokoll, Typ-Mapping
-editor/                 Dock-Panel, Syntax-Highlighting, Wrapper-Generator
+core/                   TaskManager, Scheduler, Instanzen, Protokoll, Skript-Dateien
+editor/                 Dock-Panel, Tab-Layer, Dateischicht, Syntax-Highlighting
 python/                 Python-Server (asyncio + Worker-Thread), Executor, Introspection
 web/                    bridge_worker.js (Pyodide-Worker für Web-Exports)
-docs/                   Architektur, API, Installation, Export, Web-Runtime, Changelog
+docs/                   Einstieg, API, Architektur, Export, Web-Runtime, Changelog
 example/hello/          Minimalbeispiel (Szene + Beispielskript)
 example/web_demo/       komplettes Web-Demo (Desktop + Browser, Bundle inklusive)
-tests/python/           Python-`unittest`-Suite (ausführbar, 136 Tests grün)
-tests/gdscript/         GDScript-Headless-Testrunner (godot --headless)
+tests/python/           Python-`unittest`-Suite (205 Tests)
+tests/gdscript/         GDScript-Headless-Testrunner (384 Assertions) + Editor-Verifikation
+tests/live_cython_e2e.py  portables Live-E2E für den Cython-Pfad (baut wirklich)
 tools/                  export_check.py, build_web_bundle.py, test_web_runtime.mjs
 ```
 
 ## Schnellstart
 
 1. `addons/python_bridge/` nach `res://addons/python_bridge/` kopieren.
-2. Plugin „Python Bridge“ in den Projekteinstellungen aktivieren.
+2. Plugin „Python Bridge“ in den Projekteinstellungen aktivieren (registriert
+   den Autoload `PythonBridge` und das Editor-Dock).
 3. Python 3.8+ installiert (wird automatisch gefunden oder per
    `python_executable` gesetzt).
 4. Beim ersten `start_instance()` wird venv + `websockets` automatisch
    provisioniert (1–3 Minuten, nicht-blockierend).
 
-```gdscript
-func _ready() -> void:
-    await PythonBridge.start_instance("default")
-    PythonBridge.create_script("beispiel", "def calc(a, b):\n    return a * b\n")
-    var r := await PythonBridge.call_script("beispiel", "calc", [6, 7])
-    print(r.value)   # 42
-```
-
 Derselbe Code läuft unverändert im Browser (Pyodide-Transport wird auf
-Web-Exports automatisch gewählt). Ausführlicher:
-[docs/INSTALLATION.md](docs/INSTALLATION.md), [docs/API.md](docs/API.md),
-[docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md).
+Web-Exports automatisch gewählt). Ausführlich:
+[docs/ERSTE_SCHRITTE.md](docs/ERSTE_SCHRITTE.md), [docs/API.md](docs/API.md).
+
+## Editor-Dock (neu in 0.4.0, ausgebaut in 0.5.0)
+
+Python-Dateien direkt in Godot schreiben, ausführen und löschen — ohne den
+Editor zu verlassen:
+
+- **Stabile Tabs** (ein Tab pro Datei, eigene Undo-Historie, Drag & Drop,
+  `●` für ungespeicherte Änderungen, Close-Button am aktiven Tab, `Strg+W`).
+- **Korrektes Syntax-Highlighting** inkl. mehrzeiliger Docstrings; Farben
+  werden sauber zurückgesetzt (kein „Rest der Zeile bleibt grün“).
+- **Öffnen/Speichern ohne Rätselraten:** leere Datei ≠ Lesefehler, klare
+  Fehlermeldung im Log, CRLF/BOM werden normalisiert.
+- **Zwei Tab-Arten:** persistente `.py`/`.pyx`-Dateien und temporäre
+  Scratch-Tabs, die per `execute()` laufen und nur auf Wunsch gespeichert werden.
+- **Löschen ohne Rückstände:** Quelle, `.c`, `.so`/`.pyd`, `.pyc`,
+  `__pycache__`, `cython_build_tmp`-Reste, Cython-Build-Hash und der generierte
+  Wrapper verschwinden mit einem Klick.
+- Umbenennen, GDScript-Wrapper-Generierung, Hot Reload und Cython-Build im
+  `⋯`-Menü; Shortcuts `Strg+N`, `Strg+S`, `Strg+W`, `Strg+Enter`.
+- **Einstellungen an zwei Orten**: *Projekt → Projekteinstellungen → Python
+  Bridge* oder direkt `⋯ → Einstellungen …` (mit „Speichern & neu starten“).
+  Zusätzlich liegt unter *Projekt → Werkzeuge* ein `Python Bridge`-Menü
+  (Dock anzeigen, Neue Datei, Einstellungen, Instanz starten/stoppen,
+  Cython kompilieren) — nichts ist nur im Dock versteckt.
 
 ## Export-Prüfung
 
@@ -92,19 +142,62 @@ Der Workflow steht in [example/web_demo/README.md](example/web_demo/README.md).
 ## Tests
 
 ```bash
-# Python-Tests (inkl. Web-Host-, Server-Integration und Science-Stack-Tests)
-python3 -m unittest discover -s tests/python -p "test_*.py"
-
-# GDScript-Tests (Godot-Binary nötig; Projekt einmal im Editor öffnen)
+# GDScript-Headless-Suite (Kern, Task-Layer, Serializer, Wrapper, Editor-Dateischicht)
 godot --headless --path . --script res://tests/gdscript/run_tests.gd
 
-# Echte Pyodide-Runtime (Node nötig): Runtime, vFS, NumPy/SciPy/Pandas
+# Editor-Dock im echten Editor-Kontext (Dock-Aufbau, Tabs, Speichern, Löschen)
+godot --headless --editor --path . --script res://tests/gdscript/verify_editor.gd
+
+# Python-Tests (inkl. Web-Host-, Server-Integration und Science-Stack-Tests;
+# braucht `websockets` im verwendeten Python, siehe requirements.txt)
+# Ohne websockets werden die Integrations-/Server-Tests sauber übersprungen -
+# wer sie mitlaufen lassen will, legt einmalig eine lokale Test-venv an:
+#   python -m venv .venv-test
+#   .venv-test/Scripts/python -m pip install "websockets>=11" cython setuptools
+#   .venv-test/Scripts/python -m unittest discover -s tests/python -t tests/python
+python3 -m unittest discover -s tests/python -p "test_*.py"
+
+# Cython-Pfad wirklich kompilieren (braucht C-Compiler, s. docs/ERSTE_SCHRITTE.md §5.6)
+python3 tests/live_cython_e2e.py
+
+# Echte Pyodide-Runtime (Node nötig): Runtime, vFS, file_op-Sync,
+# NumPy/SciPy/Pandas — 23 Checks, läuft auch unter Windows
+npm install pyodide@0.26.4          # einmalig, z. B. in .webtest/
+PYODIDE_PKG=.webtest/node_modules/pyodide node tools/test_web_runtime.mjs
+
+# Optional: mit fertigem Workspace-Bundle (statt Addon-Direktkopie)
 python3 tools/build_web_bundle.py --project . --out build/web_bridge
-node tools/test_web_runtime.mjs
+PYODIDE_PKG=.webtest/node_modules/pyodide node tools/test_web_runtime.mjs \
+    --bundle build/web_bridge/bridge_workspace.tar
 ```
 
 ## Versionshistorie
 
+- **v0.5.0** — **Web-Sync und Cython wirklich lauffähig**: neuer `file_op`-Kanal
+  spiegelt Skripte in den Pyodide-Workspace (mit Puffer, falls noch keine
+  Instanz läuft), das Editor-Dock meldet Speichern/Umbenennen an die Bridge,
+  Cython baut jetzt auch auf Windows (MSVC → MinGW, POSIX: gcc → zig) und
+  erkennt geänderte `.pyx` per Hash; Modulnamen werden plattformfest abgeleitet
+  (Cython-Calls liefen auf Windows vorher in `ModuleNotFoundError`). Speichern
+  als `.py` räumt Cython-Reste ab, ohne die Datei bei Schreibfehlern zu
+  verlieren. **Einstellungen sind auffindbar**: Projekt → Projekteinstellungen →
+  Python Bridge (7 Felder), `⋯ → Einstellungen …` im Dock mit „Speichern &
+  neustarten“, neues Werkzeuge-Menü und optionale `config.json`
+  (Praezedenz: Defaults → Projekt-Einstellungen → `config.json` → `configure()`).
+- **v0.4.0** — **Editor-Dock-Redesign**: Tab-Container mit stabilen Tabs,
+  korrigiertes Syntax-Highlighting (Farb-Reset + gecachter Mehrzeilen-Zustand),
+  fehlerfreies Öffnen/Speichern (leere Datei ≠ Fehler, CRLF/BOM-Normalisierung),
+  temporäre Scratch-Tabs (`execute()`), rückstandsfreies Löschen
+  (`PythonBridge.delete_script` entfernt Quelle, `.c`, `.so`/`.pyd`, `.pyc`,
+  `__pycache__`, Build-Zustand und Wrapper), Umbenennen, Shortcuts,
+  testbare Dateischicht (`editor/script_store.gd`, `core/script_files.gd`),
+  neue Headless-Tests (Editor-Dateischicht + Highlighter) und die neue
+  verbindliche Anleitung `docs/ERSTE_SCHRITTE.md`.
+- **v0.3.3** — `__bridge_deps__` wird überall erkannt (auch in `.pyx`),
+  Dependencies im Workspace-Scan.
+- **v0.3.2** — Cython-Sonderpfad (`.pyx`, inkrementeller Build, zig-Fallback),
+  Export-Skripte, ZIP-Build, Belastungsprobe.
+- **v0.3.1** — Stabilitäts- und Doku-Fixes.
 - **v0.3.0** — Web-Transport: Pyodide im Web Worker mit virtuellem
   Dateisystem, `BridgeWebInstance`/`BridgeWebConnection` unter der bestehenden
   `BridgeInstance`-State-Machine, `browser_host.py` (dieselbe Protocol-v2-/

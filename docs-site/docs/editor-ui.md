@@ -6,6 +6,14 @@ description: Bedienung des integrierten Python-Docks direkt im Godot-Editor, Sch
 
 # Godot-Integration: Bedienung im Editor
 
+:::caution UI ab Version 0.4.0 überarbeitet
+Das Editor-Dock wurde in **0.4.0** neu gebaut (Tab-Container mit stabilen Tabs,
+schmale Toolbar mit `⋯`-Menü, temporäre Scratch-Tabs, Löschen/Umbenennen).
+Die Screenshots und Button-Beschriftungen dieser Seite zeigen den Stand davor.
+Verbindlich ist
+[docs/ERSTE_SCHRITTE.md](https://github.com/CyberToshi/python-bridge/blob/main/docs/ERSTE_SCHRITTE.md) §6.
+:::
+
 Die Python Bridge ist **direkt in den Godot-Editor integriert**. Du verlässt den
 Editor nicht: Python-Dateien anlegen, bearbeiten, ausführen und als
 GDScript-Wrapper verfügbar machen passiert im Dock **„Python Bridge“** rechts
@@ -157,6 +165,23 @@ Neben dem Python-Dock registriert das Plugin einen zweiten Dock:
 Skizze über den gebündelten GDScript2All-Konverter) und **kein
 Kommunikationsweg** der Bridge ②. Für die normale Arbeit mit Python ist er
 nicht nötig; sein End-to-End-Build ist noch nicht verifiziert ③.
+
+## Einstellungen ohne Umweg
+
+Alle Optionen liegen an zwei sichtbaren Orten — Code ist dafür nie nötig:
+
+- **Projekt → Projekteinstellungen → Python Bridge** (`autostart`,
+  `workspace_dir`, `python_executable`, `dependencies`, `hot_reload_mode`,
+  `auto_generate_wrappers`, Web-Pakete).
+- **Dock → `⋯` → Einstellungen …** mit denselben Feldern und dem Knopf
+  **„Speichern & neu starten“**, damit Änderungen sofort greifen.
+
+Zusätzlich liegt unter **Projekt → Werkzeuge** ein `Python Bridge`-Menü
+(Dock anzeigen, Neue Datei, Einstellungen, Instanz starten/stoppen,
+Cython kompilieren) — die Funktionen sind also nicht im Dock versteckt.
+
+Wer keine UI will: `res://python_bridge/config.json` (Praezedenz
+Defaults → Projekt-Einstellungen → `config.json` → `configure()`).
 
 ## Zusammenfassung des Workflows
 

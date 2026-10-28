@@ -39,7 +39,7 @@ import json
 import os
 import sys
 
-from . import protocol, executor, introspection
+from . import protocol, executor, introspection, workspace_files
 from .data_registry import DataStore
 from .serializer import encode_obj
 
@@ -143,8 +143,12 @@ class BrowserHost:
         the worker log.
         """
         root = self.workspace_root
-        for path in (root, root + "/modules", root + "/plugins",
-                     root + "/packages", root + "/bridge"):
+        # Parität zum Desktop (run_server.py): der Skript-Ordner muss
+        # importierbar sein. Ohne ihn schlugen im Browser `import <skript>`
+        # und der Import benachbarter Module fehl, obwohl dieselben Dateien
+        # im Bundle liegen.
+        for path in (root + "/scripts", root, root + "/modules",
+                     root + "/plugins", root + "/packages", root + "/bridge"):
             if path and path not in sys.path:
                 sys.path.insert(0, path)
         return {
@@ -215,6 +219,28 @@ class BrowserHost:
                 })]
             return [{"text": json.dumps(protocol.build_response(
                 protocol.MSG_RELOAD_ACK, msg_id, "error", error=err))}]
+
+        # Einseitig, ohne Antwort: Kontexte/Module verwerfen (nach Loeschen
+        # oder .pyx<->.py-Umschalten). Muss VOR der naechsten Task ankommen -
+        # das ist durch die FIFO-Reihenfolge der Worker-Nachrichten gegeben.
+        if mtype == protocol.MSG_INVALIDATE:
+            self.host.invalidate(message.get("contexts") or [],
+                                 message.get("modules") or [])
+            return []
+
+        # Einseitig: Skriptdatei in den MEMFS-Workspace spiegeln. Auf dem
+        # Desktop ist das unnoetig (beide Seiten sehen dieselbe Datei), im
+        # Browser ist es der einzige Weg, damit Python neue Skripte sieht
+        # und geloeschte nicht mehr importierbar sind.
+        if mtype == protocol.MSG_FILE_OP:
+            result = workspace_files.apply_file_op(
+                self.workspace_root,
+                str(message.get("op", "")),
+                str(message.get("path", "")),
+                str(message.get("content", "")))
+            if not result.get("ok"):
+                sys.stderr.write("[python_bridge] %s\n" % result.get("error", "file_op failed"))
+            return []
 
         if mtype == protocol.MSG_INTROSPECT:
             return self._handle_introspect(message, msg_id)

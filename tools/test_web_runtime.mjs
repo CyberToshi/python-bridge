@@ -20,8 +20,8 @@
  */
 
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const results = [];
 function pass(name) { results.push(["PASS", name]); console.log("  [PASS] " + name); }
@@ -94,8 +94,10 @@ async function main() {
       // Directory-Imports sind bei ES-Modulen verboten: auf die .mjs zeigen
       pkgPath = resolve(pkg, "pyodide.mjs");
     }
-    const mod = await import(
-      pkgPath.endsWith(".mjs") || pkgPath.endsWith(".js") ? pkgPath : pkgPath);
+    // Node akzeptiert im ESM-Loader keine Windows-Pfade ("C:\\..." ist ein
+    // unbekanntes Protokoll) - absolute Pfade muessen file://-URLs sein.
+    const importTarget = isAbsolute(pkgPath) ? pathToFileURL(pkgPath).href : pkgPath;
+    const mod = await import(importTarget);
     pyodide = await mod.loadPyodide();
   } catch (err) {
     console.error("Pyodide konnte nicht geladen werden: " + err.message);
@@ -246,6 +248,42 @@ result = True`, data: {} });
       function: "check", data: {} });
     (r.status === "ok" && r.data === 7)
       ? pass("virtuelles-fs: plugin laden") : fail("virtuelles-fs: plugin laden", JSON.stringify(r));
+  }
+
+  // --- 9b) Datei-Sync: file_op spiegelt Skripte aus Godot ins MEMFS --------
+  {
+    // Genau der Kanal, den die Facade im Browser benutzt: einseitig, kein Ack.
+    const replies = dispatchText(pyodide, {
+      v: 2, type: "file_op", id: "f1", op: "write",
+      path: "scripts/web_sync_mod.py",
+      content: "def answer():\n    return 42\n",
+    });
+    if (replies.length !== 0) fail("file_op: write ist einseitig", JSON.stringify(replies));
+    else pass("file_op: write ist einseitig (kein Ack)");
+
+    const r = task(pyodide, "fs1", { command: "run", context: "fsync",
+      source: "import web_sync_mod\nresult = web_sync_mod.answer()", data: {} });
+    (r.status === "ok" && r.data === 42)
+      ? pass("file_op: geschriebenes Skript ist importierbar")
+      : fail("file_op: geschriebenes Skript ist importierbar", JSON.stringify(r));
+
+    dispatchText(pyodide, { v: 2, type: "file_op", id: "f2", op: "delete",
+      path: "scripts/web_sync_mod.py" });
+    dispatchText(pyodide, { v: 2, type: "invalidate", id: "i1",
+      contexts: [], modules: ["web_sync_mod"] });
+    const gone = task(pyodide, "fs2", { command: "run", context: "fsync2",
+      source: "import web_sync_mod\nresult = 1", data: {} });
+    (gone.type === "task_error")
+      ? pass("file_op: geloeschtes Skript ist nicht mehr importierbar")
+      : fail("file_op: geloeschtes Skript ist nicht mehr importierbar", JSON.stringify(gone));
+
+    // Pfad-Ausbruch wird abgelehnt und darf den Worker nicht toeten.
+    dispatchText(pyodide, { v: 2, type: "file_op", id: "f3", op: "write",
+      path: "../outside.py", content: "x = 1" });
+    const pong = JSON.parse(dispatchText(pyodide, { v: 2, type: "ping", id: "p9" })[0].text);
+    (pong.type === "pong")
+      ? pass("file_op: Pfad-Ausbruch abgelehnt, Worker lebt weiter")
+      : fail("file_op: Pfad-Ausbruch abgelehnt, Worker lebt weiter", JSON.stringify(pong));
   }
 
   // --- 10) Binary frame parsing (desktop-compatible chunk framing) ----------

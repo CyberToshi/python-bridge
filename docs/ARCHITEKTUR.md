@@ -1,5 +1,9 @@
 # Architektur — Python Bridge v0.2.0
 
+> **Historisch (v0.2.0).** Architektur-Dokument einer älteren Version. Für den
+> Einstieg gilt [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md), für den aktuellen Stand
+> [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
 Dieses Dokument beschreibt die tatsächlich implementierte Architektur
 (Stand: v0.2.0, Protokoll v2). Grundlage war die v0.1.0-Codebasis; alle
 Änderungen sind unten markiert.

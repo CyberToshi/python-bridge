@@ -21,9 +21,10 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/python_bridge"
 # 1) Addon-Inhalt
 cp -r "$REPO_DIR/addons/python_bridge/." "$STAGE/python_bridge/"
 
-# 2) Docs parallel zum Addon mitliefern (Markdown + HTML-Guide)
+# 2) Aktuelle Doku parallel zum Addon mitliefern (nur die verbindlichen
+#    Markdown-Dokumente; die HTML/PDF-Schnappschuesse alter Versionen nicht).
 mkdir -p "$STAGE/python_bridge/docs"
-cp "$REPO_DIR"/docs/*.md "$REPO_DIR"/docs/*.html "$STAGE/python_bridge/docs/" 2>/dev/null || true
+cp "$REPO_DIR"/docs/*.md "$STAGE/python_bridge/docs/" 2>/dev/null || true
 
 # 3) Aufräumen: keine Tests, keine Caches, keine Dev-Reste im Release
 rm -rf "$STAGE/python_bridge/tests" "$STAGE/python_bridge/__pycache__" \
@@ -34,10 +35,24 @@ rm -f "$STAGE/python_bridge/live_e2e_hardening.py"
 # 4) Export-Scripts ausführbar markieren
 chmod +x "$STAGE"/python_bridge/tools/export_*.sh 2>/dev/null || true
 
-# 5) Packen
+# 5) Packen. `zip` ist nicht ueberall vorhanden (Windows/Git Bash oft nicht),
+#    deshalb Fallback auf das Python-Modul zipfile.
+PYTHON="${PYTHON:-python}"
 rm -f "$OUT"
-(cd "$STAGE" && zip -qr "$OUT" python_bridge)
+if command -v zip >/dev/null 2>&1; then
+  (cd "$STAGE" && zip -qr "$OUT" python_bridge)
+else
+  "$PYTHON" -c 'import os,sys,zipfile
+stage,out=sys.argv[1],sys.argv[2]
+zf=zipfile.ZipFile(out,"w",zipfile.ZIP_DEFLATED)
+for root,_dirs,files in os.walk(stage):
+    for name in sorted(files):
+        path=os.path.join(root,name)
+        zf.write(path, os.path.relpath(path,stage).replace(os.sep,"/"))
+zf.close()' "$STAGE" "$OUT"
+fi
 
-echo "==> Fertig: $(basename "$OUT") ($(unzip -l "$OUT" | tail -1 | awk '{print $2}') Dateien)"
+COUNT=$("$PYTHON" -c 'import sys,zipfile;print(len(zipfile.ZipFile(sys.argv[1]).namelist()))' "$OUT")
+echo "==> Fertig: $(basename "$OUT") (${COUNT} Dateien)"
 echo "    Installation: ZIP in den addons/-Ordner des Godot-Projekts entpacken"
 echo "    (ergibt addons/python_bridge/), dann Plugin aktivieren."

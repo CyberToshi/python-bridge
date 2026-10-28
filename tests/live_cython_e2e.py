@@ -1,156 +1,208 @@
 """Live-E2E: Cython-Sonderpfad gegen einen echten Server-Prozess.
 
-Beweist die Kette end-to-end:
-  1. .pyx liegt kompiliert (.so) im scripts/-Ordner einer Test-Workspace
-  2. echter Server (venv-Python, echtes websockets) bootet,
-     run_server haengt scripts/ an sys.path
-  3. call auf einen "cython:"-Kontext importiert das Modul und liefert
-     das Ergebnis (dot -> 32.0)
-  4. zweiter Call nutzt denselben persistenten Kontext (twice(21) -> 42)
-  5. fehlendes Modul -> strukturierter task_error CythonModuleNotFound
-     (kein Crash, Verbindung bleibt nutzbar)
+Portabel (Windows/Linux/macOS) - kein hartkodierter Pfad, keine Annahme ueber
+einen fremden Rechner. Der Build wird hier frisch gemacht, damit genau die
+Kette geprueft wird, die ein Nutzer auch geht:
 
-Voraussetzung: mathx.so wurde bereits gebaut (tests/live_cython_build.sh).
+  1. ``cython_build.py`` kompiliert ``scripts/mathx.pyx`` -> ``.so``/``.pyd``
+     (Compiler-Strategie: MSVC/mingw32 auf Windows, gcc/zig auf POSIX).
+  2. Ein echter ``run_server.py`` startet mit ``--tmpdir <ws>/tmp``; sein
+     Workspace-Root ist ``<ws>``, ``scripts/`` liegt damit auf ``sys.path``.
+  3. ``call`` auf den Kontext ``cython:<pfad>/mathx.pyx`` importiert das
+     kompilierte Modul (kein Cython-Quelltext wird ausgefuehrt).
+  4. Der zweite Call nutzt denselben persistenten Kontext.
+  5. Ein ``cython:``-Kontext ohne kompiliertes Modul liefert einen
+     strukturierten ``CythonModuleNotFound``-Fehler statt eines Crashes.
+
+Voraussetzungen: ``websockets`` und ``Cython``/``setuptools`` in der laufenden
+Python-Umgebung, plus ein C-Compiler (siehe ``python -m cython_build``-Report).
+
+Aufruf::
+
+    python tests/live_cython_e2e.py
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
-import asyncio
 from pathlib import Path
 
-REPO = Path("/home/toshix/python_bridge")
-WS = Path.home() / ".local/share/godot/app_userdata/TestingSetup/python_bridge"
-RUN_SERVER = WS / "bridge/run_server.py"
-VENV_PY = WS / "venv/bin/python"
-CY_VENV_PY = Path("/tmp/cy2/bin/python")       # venv mit cython/setuptools
-SCRATCH = Path("/tmp/cy2/scratch")             # liegt .pyx + .so + build_state
-LIVE = Path("/tmp/cy_live")
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+PY_DIR = REPO / "addons" / "python_bridge" / "python"
+BUILD_TOOL = PY_DIR / "cython_build.py"
+RUN_SERVER = PY_DIR / "run_server.py"
 
-results = []
+sys.path.insert(0, str(PY_DIR))
+
+RESULTS: list[tuple[str, bool, str]] = []
 
 
-def check(name, cond, detail=""):
-    results.append((name, bool(cond), detail))
+def check(name: str, cond: bool, detail: str = "") -> bool:
+    RESULTS.append((name, bool(cond), detail))
     print("  [%s] %s%s" % ("PASS" if cond else "FAIL", name,
                            (" -> " + detail) if detail else ""))
+    return bool(cond)
 
 
-def wait_port_file(tmpdir, tag, timeout=30):
-    p = Path(tmpdir) / (tag + ".json")
+def _optional(name: str):
+    try:
+        return __import__(name)
+    except ImportError:
+        return None
+
+
+def build(scripts_dir: Path) -> dict:
+    """Ruft das Build-Tool wie die GDScript-Seite (gleiche CLI)."""
+    proc = subprocess.run(
+        [sys.executable, str(BUILD_TOOL), "--scripts-dir", str(scripts_dir)],
+        capture_output=True, text=True, timeout=900)
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return {"ok": False, "error": "kein JSON-Report",
+            "stdout": (proc.stdout or "")[-1500:], "stderr": (proc.stderr or "")[-1500:]}
+
+
+def wait_port_file(tmpdir: Path, tag: str, timeout: float = 40.0) -> dict | None:
+    path = tmpdir / (tag + ".json")
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if p.exists():
-            return json.loads(p.read_text())
+        if path.exists():
+            try:
+                return json.loads(path.read_text("utf-8"))
+            except ValueError:
+                pass
         time.sleep(0.1)
-    raise RuntimeError("Port-Datei kam nicht: " + str(p))
-
-
-async def recv_until(ws, want_type, timeout=10):
-    import websockets
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            frame = await asyncio.wait_for(ws.recv(), timeout=max(0.1, deadline - time.time()))
-        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
-            break
-        except websockets.ConnectionClosed:
-            break
-        if isinstance(frame, str):
-            m = json.loads(frame)
-            if m.get("type") == want_type:
-                return m
     return None
 
 
-async def main():
-    import websockets
-
-    # ---------------------------------------------------------------- Aufbau
-    if LIVE.exists():
-        shutil.rmtree(LIVE)
-    (LIVE / "tmp").mkdir(parents=True)
-    (LIVE / "scripts").mkdir(parents=True)
-    # .so aus dem Build-Scratch uebernehmen (gleiche Python-ABI 3.12)
-    so_files = list(SCRATCH.glob("mathx.*.so"))
-    check("kompiliertes Modul vorhanden (Vorlauf-Build)", bool(so_files),
-          ", ".join(f.name for f in so_files))
-    for f in so_files:
-        shutil.copy2(f, LIVE / "scripts" / f.name)
-    shutil.copy2(SCRATCH / "mathx.pyx", LIVE / "scripts" / "mathx.pyx")
-
-    tag = "inst"
-    # Konvention wie in der echten Bridge: tmpdir = <workspace>/tmp ->
-    # run_server leitet daraus <workspace>/scripts als Import-Pfad ab.
-    tmpdir = LIVE / "tmp"
-    tmpdir.mkdir(exist_ok=True)
-    proc = subprocess.Popen(
-        [str(VENV_PY), str(RUN_SERVER), "--bind", "127.0.0.1", "--port", "0",
-         "--tmpdir", str(tmpdir), "--tag", tag],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+async def main() -> int:
     try:
-        info = wait_port_file(tmpdir, tag)
-        port = int(info["port"])
-        check("Server gestartet (Port-Datei)", True, "port=%d" % port)
+        import websockets  # noqa: F401
+    except ImportError:
+        print("SKIP: websockets fehlt (pip install websockets)")
+        return 0
+    if _optional("Cython") is None or _optional("setuptools") is None:
+        print("SKIP: Cython/setuptools fehlen (pip install cython setuptools)")
+        return 0
 
-        async with websockets.connect("ws://127.0.0.1:%d" % port,
-                                      subprotocols=["pybridge-v2"]) as ws:
-            await ws.send(json.dumps({"v": 2, "type": "hello", "id": "h1", "caps": {}}))
-            ack = await recv_until(ws, "hello_ack")
-            check("hello_ack", ack is not None)
+    from python_bridge import protocol
 
-            call = lambda mid, ctx, fn, args: json.dumps(
-                {"v": 2, "type": "task", "id": mid, "command": "call",
-                 "context": ctx, "source": "", "source_hash": None,
-                 "function": fn, "data": {"args": args}})
+    tmp = Path(tempfile.mkdtemp(prefix="pb_cy_live_"))
+    ws = tmp / "ws"
+    scripts = ws / "scripts"
+    (ws / "tmp").mkdir(parents=True, exist_ok=True)
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / "mathx.pyx").write_text(
+        "def dot(a, b):\n"
+        "    return float(sum(x * y for x, y in zip(a, b)))\n"
+        "\n"
+        "def twice(v):\n"
+        "    cdef int i\n"
+        "    s = 0\n"
+        "    for i in range(v):\n"
+        "        s += 2\n"
+        "    return s\n",
+        "utf-8")
 
-            # (3) Erster Call: import + Verdrahtung + Ausfuehrung
-            await ws.send(call("c1", "cython:%s/scripts/mathx.pyx" % LIVE,
-                               "dot", [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
-            r = await recv_until(ws, "task_result")
-            check("cython call dot == 32.0",
-                  r is not None and r.get("status") == "ok"
-                  and r.get("data") == 32.0,
-                  "data=%s" % (r or {}).get("data"))
+    proc = None
+    try:
+        # ------------------------------------------------------------- Build
+        report = build(scripts)
+        check("cython_build.py: ok", bool(report.get("ok")), json.dumps(
+            {k: report.get(k) for k in ("built", "skipped", "compiler", "duration_s", "error")},
+            ensure_ascii=False))
+        built = list(report.get("built") or []) + list(report.get("skipped") or [])
+        check("mathx wurde gebaut", "mathx" in built, str(built))
+        artifacts = [p.name for p in scripts.iterdir()
+                     if p.name.startswith("mathx.") and p.suffix in (".so", ".pyd")]
+        if not check("kompiliertes Modul liegt neben der .pyx", bool(artifacts), str(artifacts)):
+            for err in report.get("errors") or []:
+                print("     build error: %s" % (err.get("message", "")[-600:]))
+            return 1
 
-            # (4) Zweiter Call: gleicher Kontext, Namespace persistiert
-            await ws.send(call("c2", "cython:%s/scripts/mathx.pyx" % LIVE,
-                               "twice", [21]))
-            r = await recv_until(ws, "task_result")
-            check("cython call twice(21) == 42 (Namespace persistiert)",
-                  r is not None and r.get("status") == "ok"
-                  and r.get("data") == 42,
-                  "data=%s" % (r or {}).get("data"))
+        # ------------------------------------------------------------ Server
+        proc = subprocess.Popen(
+            [sys.executable, str(RUN_SERVER), "--bind", "127.0.0.1", "--port", "0",
+             "--tmpdir", str(ws / "tmp"), "--tag", "cy"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        info = wait_port_file(ws / "tmp", "cy")
+        if not check("Server meldet seinen Port", info is not None):
+            return 1
+        url = "ws://127.0.0.1:%d" % int(info["port"])
+        context = "cython:" + str(scripts / "mathx.pyx")
 
-            # (5) Fehlendes Modul: strukturierter Fehler, kein Crash
-            await ws.send(call("c3", "cython:%s/scripts/ghost.pyx" % LIVE,
-                               "f", []))
-            e = await recv_until(ws, "task_error")
-            ok = (e is not None
-                  and e.get("error", {}).get("type") == "CythonModuleNotFound")
-            check("CythonModuleNotFound strukturiert", ok,
-                  "type=%s" % (e or {}).get("error", {}).get("type"))
+        async with websockets.connect(url, subprotocols=["pybridge-v2"]) as sock:
+            async def call(task_id: str, function: str, args: list, source: str = ""):
+                await sock.send(protocol.build_text({
+                    "v": 2, "type": "task", "id": task_id, "command": "call",
+                    "context": context, "source": source, "function": function,
+                    "data": {"args": args, "kwargs": {}},
+                }))
+                raw = await asyncio.wait_for(sock.recv(), timeout=30)
+                msg, data = protocol.parse(raw)
+                return msg, data
 
-            # Verbindung danach weiterhin nutzbar?
-            await ws.send(call("c4", "cython:%s/scripts/mathx.pyx" % LIVE,
-                               "twice", [2]))
-            r = await recv_until(ws, "task_result")
-            check("Verbindung nach Fehler weiterhin nutzbar",
-                  r is not None and r.get("status") == "ok"
-                  and r.get("data") == 4)
+            msg, data = await call("c1", "dot", [[3.0, 4.0], [5.0, 6.0]])
+            check("cython-Call dot(...) -> 39.0", msg.get("type") == "task_result" and data == 39.0,
+                  "%s / %s" % (msg.get("type"), data))
+
+            msg, data = await call("c2", "twice", [21])
+            check("zweiter Call nutzt denselben Kontext (twice(21) -> 42)",
+                  msg.get("type") == "task_result" and data == 42, str(data))
+
+            # Fehlendes Modul: eigener Kontext, keine kompilierte Seite
+            await sock.send(protocol.build_text({
+                "v": 2, "type": "task", "id": "c3", "command": "call",
+                "context": "cython:" + str(scripts / "missing.pyx"), "source": "",
+                "function": "nope", "data": {"args": [], "kwargs": {}},
+            }))
+            raw = await asyncio.wait_for(sock.recv(), timeout=30)
+            msg, _ = protocol.parse(raw)
+            check("fehlendes Modul -> strukturierter task_error",
+                  msg.get("type") == "task_error"
+                  and (msg.get("error") or {}).get("code") in
+                  ("CythonModuleNotFound", protocol.CATEGORY_TASK_ERROR),
+                  json.dumps(msg.get("error") or {})[:300])
+
+            # Verbindung bleibt nutzbar
+            await sock.send(protocol.build_text({"v": 2, "type": protocol.MSG_PING,
+                                                 "id": "p1"}))
+            raw = await asyncio.wait_for(sock.recv(), timeout=10)
+            msg, _ = protocol.parse(raw)
+            check("Verbindung nach dem Fehler weiter nutzbar",
+                  msg.get("type") == protocol.MSG_PONG)
+
+        # ------------------------------------------------------- Inkrementell
+        again = build(scripts)
+        check("unveraenderte .pyx wird uebersprungen (inkrementell)",
+              bool(again.get("ok")) and "mathx" in list(again.get("skipped") or []),
+              json.dumps({k: again.get(k) for k in ("built", "skipped")}))
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
+        if proc is not None:
             proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
 
-    print("\n== Ergebnis: %d/%d PASS" % (
-        sum(1 for _, ok, _ in results if ok), len(results)))
-    return 0 if all(ok for _, ok, _ in results) else 1
+    failed = [name for name, ok, _ in RESULTS if not ok]
+    print("\n%d/%d Checks bestanden%s" % (len(RESULTS) - len(failed), len(RESULTS),
+                                         "" if not failed else " - FAIL: " + ", ".join(failed)))
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":

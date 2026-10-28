@@ -37,6 +37,14 @@ var _data_seq: int = 0
 # Cython-Sonderpfad (Desktop-only): Manager + laufende Builds.
 var _cython: BridgeCythonManager = null
 var _cython_awaiters: Array = []  # [{"scripts_dir": String, "awaiter": Callable}]
+# stem -> sha256 der .pyx beim letzten Build (Basis der Stale-Erkennung).
+var _cython_built_hash: Dictionary = {}
+# Web nur: Datei-Ops, fuer die es noch keine bereite Instanz gab. Ohne diesen
+# Puffer ginge ein Skript verloren, das der Nutzer VOR dem ersten Python-Start
+# anlegt (MEMFS bekommt es sonst nie zu sehen). Pro Pfad gewinnt die letzte
+# Operation: write+x -> write+y -> delete ergibt genau delete.
+var _pending_file_ops: Dictionary = {}
+const MAX_PENDING_FILE_OPS := 256
 
 func _init() -> void:
 	# Runtime initialization: the global class cache is fully built by the
@@ -46,6 +54,10 @@ func _init() -> void:
 		_settings = PythonBridgeConfig.defaults()
 
 func _enter_tree() -> void:
+	# Zuerst die effektive Konfiguration lesen (Projekt-Einstellungen bzw.
+	# config.json), damit TaskManager/Scheduler von Anfang an die richtigen
+	# Werte sehen - ein configure() danach aus Nutzercode gewinnt weiterhin.
+	reload_config()
 	_init_task_layer()
 	if bool(_settings.get("autostart", false)):
 		# Bewusst ohne await; die Instanz zieht asynchron hoch.
@@ -86,6 +98,62 @@ static func system() -> Node:
 	return root.get_node_or_null("PythonBridge") if root else null
 
 # ------------------------------------------------------------------ Konfiguration
+## Dateiname der optionalen Konfiguration im Workspace.
+const CONFIG_FILE_NAME := "config.json"
+
+## Liest die effektive Konfiguration neu. Praezedenz (spaeter gewinnt):
+##   1. Defaults (PythonBridgeConfig.defaults())
+##   2. Projekt-Einstellungen: Projekt > Projekteinstellungen > "Python Bridge"
+##   3. <workspace>/config.json  (z. B. fuer Teams/CI, versionierbar)
+##   4. ein spaeterer configure()-Aufruf aus Nutzercode ersetzt alles.
+##
+## Laufende Instanzen werden bewusst NICHT neu gestartet: die neuen Werte
+## greifen beim naechsten start_instance(). Im Editor bietet der
+## Einstellungen-Dialog im Dock genau diesen Neustart an.
+func reload_config() -> PythonBridgeResult:
+	var project_values := PythonBridgeConfig.read_project_values()
+	var workspace := str(PythonBridgeConfig.collect(project_values)
+		.get("workspace_dir", PythonBridgeConfig.DEFAULT_WORKSPACE_DIR))
+	# Im Export ist der Workspace auf user:// umgeleitet: dort sucht der Nutzer
+	# seine config.json, waehrend eine mitgelieferte im PCK (res://) liegt.
+	# Beide werden beruecksichtigt - die erste gefundene gewinnt.
+	var candidates: Array = [workspace]
+	if OS.has_feature("template"):
+		for fallback in ["user://python_bridge", PythonBridgeConfig.DEFAULT_WORKSPACE_DIR]:
+			if not candidates.has(fallback):
+				candidates.append(fallback)
+	var file_values: Dictionary = {}
+	for candidate in candidates:
+		file_values = _read_config_file(str(candidate))
+		if not file_values.is_empty():
+			break
+	configure(PythonBridgeConfig.collect(project_values, file_values))
+	return PythonBridgeResult.success({
+		"settings": _settings.duplicate(true),
+		"project_settings": project_values.keys(),
+		"config_file": CONFIG_FILE_NAME if not file_values.is_empty() else "",
+	})
+
+## Liest <workspace>/config.json (optional). Fehlende oder kaputte Dateien
+## sind kein Fehler: die Datei ist eine optionale Override-Quelle.
+func _read_config_file(workspace: String) -> Dictionary:
+	if workspace.strip_edges() == "":
+		return {}
+	var path := workspace.path_join(CONFIG_FILE_NAME)
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var text := file.get_as_text()
+	file.close()
+	var parsed: Variant = JSON.parse_string(text)
+	if parsed is Dictionary:
+		return parsed
+	push_warning("[PythonBridge] %s ist kein JSON-Objekt - wird ignoriert." % path)
+	return {}
+
+## Setzt explizit alle Einstellungen (ersetzt die oben genannte Kette).
 func configure(cfg: Dictionary) -> void:
 	_settings = PythonBridgeConfig.normalize(cfg)
 	_apply_export_workspace_redirect()
@@ -117,6 +185,18 @@ func _apply_export_workspace_redirect() -> void:
 
 func workspace_dir() -> String:
 	return str(_settings.get("workspace_dir", PythonBridgeConfig.DEFAULT_WORKSPACE_DIR))
+
+## Ordner der persistenten Skripte (<workspace>/scripts).
+func scripts_dir() -> String:
+	return workspace_dir() + "/scripts"
+
+## Ordner der generierten GDScript-Wrapper. Im Export ist res:// schreibbar
+## umgeleitet - dort liegt der Wrapper neben dem Workspace.
+func wrapper_dir() -> String:
+	if OS.has_feature("template"):
+		return workspace_dir() + "/wrappers"
+	var configured := str(_settings.get("wrapper_dir", ""))
+	return configured if configured != "" else workspace_dir() + "/wrappers"
 
 func config() -> Dictionary:
 	return _settings.duplicate(true)
@@ -155,6 +235,38 @@ func start_instance(instance_name := PythonBridgeConfig.DEFAULT_INSTANCE) -> Pyt
 	if await inst.wait_ready():
 		return PythonBridgeResult.success({"instance": instance_name})
 	return PythonBridgeResult.failed(inst.status_text(), inst.last_error_message())
+
+# Zustaende, in denen eine Instanz noch arbeitet und ein Start warten muesste.
+const ACTIVE_STATUSES := ["provisioning", "starting", "connecting", "handshake",
+	"ready", "stopping"]
+
+## Startet eine Instanz sauber neu (Stop abwarten, dann Start mit den aktuellen
+## Einstellungen). Gebraucht nach Einstellungs-Aenderungen - ein direktes
+## stop()+start() wuerde am STOPPING-Zustand scheitern („stopped").
+func restart_instance(instance_name := PythonBridgeConfig.DEFAULT_INSTANCE,
+		timeout_sec := 15.0) -> PythonBridgeResult:
+	var inst := _get_instance_by_name(instance_name)
+	if inst != null and inst.status_text() in ACTIVE_STATUSES:
+		stop_instance(instance_name)
+		var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+		while Time.get_ticks_msec() < deadline:
+			inst = _get_instance_by_name(instance_name)
+			if inst == null or not (inst.status_text() in ["provisioning", "starting",
+					"connecting", "handshake", "ready", "stopping"]):
+				break
+			if Engine.get_main_loop() is SceneTree:
+				await (Engine.get_main_loop() as SceneTree).process_frame
+			else:
+				break
+		# Haengt der Stop (Prozess reagiert nicht), hart beenden statt einen
+		# zweiten Prozess neben den alten zu starten.
+		inst = _get_instance_by_name(instance_name)
+		if inst != null and inst.status_text() in ["stopping", "ready", "handshake",
+				"connecting", "starting", "provisioning"]:
+			inst.shutdown_now()
+			_instances.erase(instance_name)
+			inst.queue_free()
+	return await start_instance(instance_name)
 
 func get_instance(instance_name := PythonBridgeConfig.DEFAULT_INSTANCE) -> BridgeInstance:
 	return _get_instance_by_name(instance_name)
@@ -210,6 +322,12 @@ func _on_instance_state(instance: String, state: String) -> void:
 		# Alle Daten-Handles dieser Instanz sind ungueltig: der Python-Prozess
 		# kennt die gehaltenen Datensaetze nicht mehr.
 		_mark_instance_refs_stale(instance)
+	elif state == "ready":
+		# Ein frisch gestarteter Worker hat den Workspace-Snapshot vom
+		# Bundle-Start - alles, was Godot seitdem geschrieben hat, muss jetzt
+		# nachgezogen werden (sonst fehlt z. B. ein im Spiel angelegtes
+		# Skript im Browser dauerhaft).
+		_flush_pending_file_ops(_get_instance_by_name(instance))
 	instance_state_changed.emit(instance, state)
 
 func _on_instance_message(instance: String, parsed: Dictionary) -> void:
@@ -421,9 +539,9 @@ func create_script(script_id: String, code: String, subfolder := "") -> PythonBr
 			"Cannot open file for writing: " + path))
 	file.store_string(code)
 	file.close()
-	# Registry-Cache verwerfen, damit der naechste Lesezugriff den neuen
-	# Inhalt sieht (mtime-Granularitaet ist sonst nicht zuverlaessig).
-	_script_registry.forget(path)
+	# Registry-Cache verwerfen und (im Web) die Datei in den Python-
+	# Workspace spiegeln, damit `import <id>` sie sofort sieht.
+	notify_script_written(script_id, path)
 	return PythonBridgeResult.success({"path": path})
 
 ## Speichert Code als .pyx (Cython) im Skript-Ordner. Wie create_script,
@@ -441,7 +559,161 @@ func create_cython_script(script_id: String, code: String) -> PythonBridgeResult
 			"Cannot open file for writing: " + path))
 	file.store_string(code)
 	file.close()
+	notify_script_written(script_id, path)
 	return PythonBridgeResult.success({"path": path, "cython": true})
+
+## Alle persistenten Skripte im Workspace: [{id, ext, path}], alphabetisch.
+func list_scripts() -> Array:
+	return PythonBridgeScriptFiles.list_scripts(scripts_dir())
+
+## Prueft eine NEUE Script-Id ("" = verwendbar, sonst Meldung). Gilt fuer
+## Anlegen/Umbenennen; vorhandene Dateien bleiben unabhaengig davon nutzbar.
+func validate_script_id(script_id: String) -> String:
+	return PythonBridgeScriptFiles.validate_script_id(script_id)
+
+## Loescht ein persistentes Skript RÜCKSTANDSFREI: Quelle (.py/.pyx), UID-
+## Sidecar, .pyc, Cython-Zwischenstaende (.c/.o/.obj), kompilierte Module
+## (.so/.pyd), Build-Zustand und den generierten Wrapper (+ .uid).
+## Rueckgabe-value: {ok, existed, removed[], failed[], cython_state_cleared}.
+func delete_script(script_id: String) -> PythonBridgeResult:
+	var report := PythonBridgeScriptFiles.delete_script(scripts_dir(), wrapper_dir(), script_id)
+	if not bool(report.get("ok", false)):
+		var reason := str(report.get("error", ""))
+		var failed: Array = report.get("failed", [])
+		if reason == "" and not failed.is_empty():
+			reason = "Loeschen unvollstaendig: " + str(failed[0])
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
+			reason if reason != "" else "Loeschen fehlgeschlagen."))
+	# Registry-Caches, laufende Kontexte und (Web) die Datei im Python-
+	# Workspace aufraeumen - sonst liefe ein geloeschtes Cython-Modul aus dem
+	# sys.modules-Cache weiter.
+	notify_script_deleted(script_id)
+	return PythonBridgeResult.success(report)
+
+# ------------------------------------------------------------------ Sync
+## True, wenn Python in einem eigenen Dateisystem laeuft (Pyodide) und
+## deshalb Dateioperationen gespiegelt werden muessen.
+func _is_web_workspace() -> bool:
+	return OS.has_feature("web") or bool(_settings.get("web_transport", false))
+
+## Nach dem Schreiben einer Skriptdatei aufrufen. Verwirft den Registry-Cache
+## und spiegelt die Datei im Web-Export in den Pyodide-Workspace (MEMFS).
+## Auf dem Desktop ein No-op ueber den Cache hinaus: Godot und Python sehen
+## dort dieselbe Datei.
+func notify_script_written(script_id: String, path: String) -> void:
+	_script_registry.forget(path)
+	_script_registry.forget(script_path_for(script_id, ""))
+	_script_registry.forget(scripts_dir() + "/" + script_id + ".pyx")
+	if not _is_web_workspace() or not FileAccess.file_exists(path):
+		return
+	_send_file_op("write", _workspace_relative(path, script_id), FileAccess.get_file_as_string(path))
+
+## Vollstaendiger "nach dem Speichern"-Pfad fuer Schreiber, die direkt auf die
+## Platte gehen (Editor-Dock, script_store): Cache verwerfen, Web-MEMFS
+## spiegeln, Gegenstueck-Endung entfernen und ein evtl. importiertes
+## Cython-Modul des Stems verwerfen, wenn jetzt eine .py die Quelle ist (das
+## .so/.pyd wurde beim Speichern geloescht - ohne Invalidate liefe das alte
+## Modul aus sys.modules weiter).
+func notify_script_saved(script_id: String, path: String) -> void:
+	notify_script_written(script_id, path)
+	if path.ends_with(".pyx"):
+		# Cython: kompiliertes Modul verwerfen, damit der naechste call_script
+		# neu baut (Hash-Vergleich) und importiert statt alten Code aus
+		# sys.modules weiterlaufen zu lassen.
+		_invalidate_contexts(["cython:" + path], [script_id.get_file()])
+		return
+	_invalidate_contexts([], [script_id.get_file()])
+	if _is_web_workspace():
+		# Gegenstueck-Endung im MEMFS entfernen (nur eine Quelle pro Stem).
+		_send_file_op("delete", "scripts/" + script_id + ".pyx", "")
+
+## Nach dem Loeschen eines Skripts aufrufen: Cache, laufende Kontexte und das
+## importierte Cython-Modul verwerfen; im Web zusaetzlich die Dateien im
+## Pyodide-Workspace entfernen.
+func notify_script_deleted(script_id: String) -> void:
+	var py := script_path_for(script_id, "")
+	var pyx := scripts_dir() + "/" + script_id + ".pyx"
+	_script_registry.forget(py)
+	_script_registry.forget(pyx)
+	_cython_built_hash.erase(script_id.get_file())
+	_invalidate_contexts(["script:" + py, "cython:" + pyx], [script_id.get_file()])
+	if _is_web_workspace():
+		_send_file_op("delete", "scripts/" + script_id + ".py", "")
+		_send_file_op("delete", "scripts/" + script_id + ".pyx", "")
+
+## Pfad relativ zum Workspace ("scripts/unter/x.py") fuer den file_op-Kanal.
+func _workspace_relative(path: String, script_id: String) -> String:
+	var base := scripts_dir() + "/"
+	if path.begins_with(base):
+		return "scripts/" + path.substr(base.length())
+	return "scripts/" + script_id + "." + path.get_extension()
+
+## Sendet eine einseitige Datei-Operation an alle bereiten Instanzen. Ist
+## keine bereit (Skript entsteht vor dem ersten Python-Start), wird sie im
+## Web gepuffert und beim Wechsel nach "ready" nachgezogen.
+func _send_file_op(op: String, rel_path: String, content: String) -> void:
+	var ready := _get_ready_instances()
+	if ready.is_empty():
+		if _is_web_workspace():
+			_queue_file_op(op, rel_path, content)
+		return
+	var msg := _file_op_message(op, rel_path, content)
+	for inst in ready:
+		_send_to_instance(inst, msg)
+
+func _file_op_message(op: String, rel_path: String, content: String) -> Dictionary:
+	return {
+		"v": PythonProtocol.PROTOCOL_VERSION,
+		"type": PythonProtocol.MSG_FILE_OP,
+		"id": "file-%d" % Time.get_ticks_usec(),
+		"op": op,
+		"path": rel_path,
+		"content": content,
+	}
+
+## Letzte Operation pro Pfad gewinnt; die Reihenfolge der Einfuegung bleibt
+## erhalten (Dictionary ist in GDScript insertion-ordered).
+func _queue_file_op(op: String, rel_path: String, content: String) -> void:
+	if not _pending_file_ops.has(rel_path) and _pending_file_ops.size() >= MAX_PENDING_FILE_OPS:
+		# Aeltestes Op verwerfen statt unbegrenzt zu wachsen.
+		_pending_file_ops.erase(_pending_file_ops.keys()[0])
+	_pending_file_ops[rel_path] = {"op": op, "path": rel_path, "content": content}
+
+## Schickt alle gepufferten Datei-Ops an die (jetzt) bereite(n) Instanz(en).
+## Wird beim State-Wechsel nach "ready" aufgerufen.
+func _flush_pending_file_ops(instance: Object = null) -> void:
+	if _pending_file_ops.is_empty():
+		return
+	var targets: Array = []
+	if instance != null and instance is BridgeInstance \
+			and (instance as BridgeInstance).is_ready():
+		targets.append(instance)
+	else:
+		targets = _get_ready_instances()
+	if targets.is_empty():
+		return
+	var queued: Array = _pending_file_ops.values()
+	_pending_file_ops.clear()
+	for item in queued:
+		var msg := _file_op_message(str(item["op"]), str(item["path"]), str(item["content"]))
+		for inst in targets:
+			_send_to_instance(inst, msg)
+
+## Verwirft Kontexte + Modulnamen in allen bereiten Instanzen (einseitig).
+func _invalidate_contexts(contexts: Array, modules: Array) -> void:
+	var ready := _get_ready_instances()
+	if ready.is_empty():
+		return
+	var msg := {
+		"v": PythonProtocol.PROTOCOL_VERSION,
+		"type": PythonProtocol.MSG_INVALIDATE,
+		"id": "inv-%d" % Time.get_ticks_usec(),
+		"contexts": contexts,
+		"modules": modules,
+	}
+	for inst in ready:
+		_send_to_instance(inst, msg)
 
 ## Startet den inkrementellen Cython-Build (Desktop-only). Rueckgabe via
 ## await; Report-Format siehe cython_build.py (ok/built/skipped/errors/
@@ -484,11 +756,17 @@ func forget_script_cache(path: String) -> void:
 ## gesperrt (mit klarer Meldung statt kryptischem SyntaxError). Cython-
 ## Module sind Call-Ziele - die Funktionen werden importiert.
 func _cython_run_style_guard(script_id: String) -> String:
-	if resolve_script_path(script_id).ends_with(".pyx") and not OS.has_feature("web"):
-		return "execute_script/define_script unterstuetzen keine .pyx-Module " \
-			+ "(rohes Cython ist nicht ausfuehrbar). Funktionen per " \
-			+ "call_script aufrufen - das kompilierte Modul wird importiert."
-	return ""
+	if not resolve_script_path(script_id).ends_with(".pyx"):
+		return ""
+	if OS.has_feature("web"):
+		# Vorher lief rohes Cython im Web als normales Python in einen
+		# SyntaxError - jetzt eine klare, handlungsfaehige Meldung.
+		return "Cython (.pyx) wird im Web-Export nicht unterstuetzt: Pyodide " \
+			+ "hat keinen C-Compiler. Speichere das Skript als .py oder nutze " \
+			+ "den Desktop-Build."
+	return "execute_script/define_script unterstuetzen keine .pyx-Module " \
+		+ "(rohes Cython ist nicht ausfuehrbar). Funktionen per " \
+		+ "call_script aufrufen - das kompilierte Modul wird importiert."
 
 func get_script_source(script_id: String) -> String:
 	var entry := _script_entry(script_id)
@@ -519,6 +797,13 @@ func execute_script(script_id: String, input: Variant = {}, instance := PythonBr
 	return await _submit_and_await(task, instance)
 
 func call_script(script_id: String, function: String, args: Array = [], kwargs: Dictionary = {}, instance := PythonBridgeConfig.DEFAULT_INSTANCE, timeout_sec := 30.0) -> PythonBridgeResult:
+	# Im Web gibt es keinen C-Compiler: rohes .pyx darf nicht als Python
+	# ausgefuehrt werden (sonst SyntaxError aus dem Cython-Quelltext).
+	if OS.has_feature("web") and resolve_script_path(script_id).ends_with(".pyx"):
+		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
+			PythonBridgeErrorHandler.CATEGORY_BRIDGE_ERROR,
+			"Cython (.pyx) wird im Web-Export nicht unterstuetzt (kein C-Compiler " \
+			+ "in Pyodide). Speichere das Skript als .py."))
 	var entry := _script_entry(script_id)
 	if entry.is_empty():
 		return PythonBridgeResult.failed_with_error(PythonBridgeErrorHandler.make(
@@ -563,17 +848,52 @@ func _call_script_inner(script_id: String, function: String, args: Array, kwargs
 	var entry_path := resolve_script_path(script_id)
 	if entry_path.ends_with(".pyx") and not OS.has_feature("web"):
 		var stem := entry_path.get_file().get_basename()
-		if not _cython_output_present(stem):
+		if _cython_needs_build(stem, entry_path):
 			var build_res: PythonBridgeResult = await compile_cython("", false)
 			if build_res.is_error():
 				return build_res
-		return await _submit_and_await(PythonBridgeTask.make_call(_next_task_id(),
+			# Frisch gebaute Seite: importiertes Modul verwerfen, sonst liefe
+			# weiterhin der alte Code aus sys.modules.
+			_invalidate_contexts(["cython:" + entry_path], [stem])
+		# Cython-Tasks tragen keine Source - die __bridge_deps__-Deklarationen
+		# des .pyx-Scripts gehen via task.meta["deps"] an den Server (Auto-
+		# Installation fehlender Pakete vor dem Aufruf), sonst wuerde ein
+		# numpy-Import im kompilierten Modul mit DependencyError enden.
+		var ctask := PythonBridgeTask.make_call(_next_task_id(),
 			"cython:" + entry_path, "", function, args, kwargs,
-			int(timeout_sec * 1000.0)), instance)
+			int(timeout_sec * 1000.0))
+		ctask.meta["deps"] = PythonBridgeDependencyManager.deps_from_source(entry.source)
+		return await _submit_and_await(ctask, instance)
 	var task := PythonBridgeTask.make_call(_next_task_id(), _script_context(script_id), entry.source,
 		function, args, kwargs, int(timeout_sec * 1000.0))
 	task.source_hash = entry.hash
 	return await _submit_and_await(task, instance)
+
+## True, wenn fuer stem gebaut werden muss: keine Seite vorhanden, Quelle
+## unbekannt (erster Aufruf nach Neustart) oder .pyx-Inhalt seit dem letzten
+## Build geaendert. Ohne den Hash-Vergleich liefe nach dem Editieren einer
+## .pyx stillschweigend der alte kompilierte Stand weiter.
+func _cython_needs_build(stem: String, pyx_path: String) -> bool:
+	if not _cython_output_present(stem):
+		return true
+	var current := FileAccess.get_sha256(pyx_path)
+	if current == "":
+		return false  # Quelle unlesbar: Build wuerde auch scheitern
+	if not _cython_built_hash.has(stem):
+		return true   # unbekannt -> einmal inkrementell pruefen (Build skippt)
+	return str(_cython_built_hash[stem]) != current
+
+## Haelt die .pyx-Hashes des letzten Builds fest (built + skipped).
+func _remember_cython_hashes(report: Dictionary) -> void:
+	for key in ["built", "skipped"]:
+		var stems: Array = report.get(key, [])
+		if not (stems is Array):
+			continue
+		for s in stems:
+			var stem := str(s)
+			var p := scripts_dir() + "/" + stem + ".pyx"
+			if FileAccess.file_exists(p):
+				_cython_built_hash[stem] = FileAccess.get_sha256(p)
 
 ## True, wenn fuer stem bereits eine kompilierte Seite (.so/.pyd) liegt.
 func _cython_output_present(stem: String) -> bool:
@@ -702,6 +1022,7 @@ func _on_cython_finished(report: Dictionary) -> void:
 
 func _cython_result(report: Dictionary) -> PythonBridgeResult:
 	if bool(report.get("ok", false)):
+		_remember_cython_hashes(report)
 		return PythonBridgeResult.success(report)
 	var msg := str(report.get("error", ""))
 	if msg == "" and not report.get("errors", []).is_empty():
@@ -721,6 +1042,17 @@ func _cython_tick() -> void:
 ## Godot-State bleibt unangetastet. Liefert eine PythonBridgeResult-Meldung.
 func hot_reload_script(script_id: String) -> PythonBridgeResult:
 	var mode := str(_settings.get("hot_reload_mode", "reload_context"))
+	# Cython ist kein Source-Kontext: rohes .pyx ist nicht exec-bar, ein
+	# "reload" mit dem .pyx-Text wuerde als SyntaxError enden. Statt dessen das
+	# kompilierte Modul + den cython:-Kontext verwerfen; der naechste
+	# call_script baut bei geaenderter Quelle neu und importiert frisch.
+	if resolve_script_path(script_id).ends_with(".pyx") and not OS.has_feature("web"):
+		var pyx_path := resolve_script_path(script_id)
+		var stem := pyx_path.get_file().get_basename()
+		_invalidate_contexts(["cython:" + pyx_path], [stem])
+		_script_registry.reset_context_all("cython:" + pyx_path)
+		return PythonBridgeResult.success(
+			{"reloaded": _get_ready_instances().size() > 0, "mode": "cython_invalidate"})
 	if mode == "none":
 		return PythonBridgeResult.success({"reloaded": false, "mode": "none"})
 	# Immer frisch von der Platte lesen (nicht aus dem mtime-Cache), damit
