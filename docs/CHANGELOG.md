@@ -62,6 +62,16 @@
   `reload_config()` liest die Kette neu, ohne eine laufende Instanz zu beenden.
 - **`python_executable` = System-Python** wird als dokumentierter Weg
   unterstuetzt (venv wird uebersprungen, `websockets` muss vorhanden sein).
+- **Introspection-Antworten erreichen die Facade wieder.**
+  `BridgeInstance._handle_message()` leitete `introspect_result` nicht weiter;
+  die Antwort fiel in den "unknown message"-Zweig und `introspect_script()`
+  lief zwangsweise in `Introspect timeout` - damit war auch die
+  Wrapper-Generierung im Dock unbrauchbar. Der Typ steht jetzt in der
+  Routing-Liste, `tests/gdscript/test_instance_routing.gd` pinnt das.
+- **Beispiele fuer beide Enden:** `example/minimal/` (Szene + drei Zeilen) und
+  `example/maximum/` (alle 45 Config-Keys, zwei Instanzen, `.py` + `.pyx`,
+  DataRef, Introspection, alle Signale) - beide headless verifiziert und in der
+  Doku auf der Seite "Zwei Beispielprojekte" erklaert.
 
 ### Tests
 
@@ -73,9 +83,9 @@
   frisch, startet einen echten Server und prueft Call, Persistenz,
   Fehlerpfad und inkrementelles Skip - vorher mit Linux-Hardcodings
   unbrauchbar.
-- Zahlen: 205 Python-Tests (28 skipped ohne optionale Pakete), 384
-  GDScript-Assertions, 17 Editor-Verifikationen, 9 Live-Cython-Checks,
-  23 Checks in echter Pyodide-Runtime.
+- Zahlen: 205 Python-Tests (0 skipped, sobald numpy/pandas/scipy in der
+  Testumgebung liegen), 391 GDScript-Assertions, 17 Editor-Verifikationen,
+  9 Live-Cython-Checks, 24 Checks in echter Pyodide-Runtime (mit Bundle).
 - `tools/test_web_runtime.mjs` lief unter Windows gar nicht (Node verlangt
   `file://`-URLs für absolute Modulpfade) - behoben. Der Test prüft jetzt auch
   den `file_op`-Kanal in echter Pyodide-Runtime: schreiben → importierbar,

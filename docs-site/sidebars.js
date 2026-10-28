@@ -11,6 +11,7 @@ const sidebars = {
       items: [
         'installation',
         'getting-started',
+        'beispiele',
         'editor-ui',
         'export-check',
         'web-runtime',

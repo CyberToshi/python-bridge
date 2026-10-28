@@ -13,6 +13,7 @@ const SUITES := [
 	"res://tests/gdscript/test_wrapper_generator.gd",
 	"res://tests/gdscript/test_editor_files.gd",
 	"res://tests/gdscript/test_bridge_sync.gd",
+	"res://tests/gdscript/test_instance_routing.gd",
 	"res://tests/gdscript/test_config_settings.gd",
 ]
 

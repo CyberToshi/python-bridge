@@ -304,7 +304,11 @@ func _handle_message(parsed: Dictionary) -> void:
 			# hat den Task bereits als gefallen verbucht - hier nur nicht
 			# als "unknown message" spamen.
 			pass
-		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT, PythonProtocol.MSG_STATUS, PythonProtocol.MSG_DATA_RESULT, PythonProtocol.MSG_DATA_ACK:
+		# MSG_INTROSPECT_RESULT gehoert zwingend hierher: die Facade loest die
+		# Antwort ueber _pending_introspect auf. Fehlte der Typ, landete jede
+		# Introspection im "unknown message"-Zweig und der Aufrufer lief in
+		# einen Timeout (Wrapper-Generierung im Dock inklusive).
+		PythonProtocol.MSG_TASK_RESULT, PythonProtocol.MSG_TASK_ERROR, PythonProtocol.MSG_BATCH_RESULT, PythonProtocol.MSG_EVENT, PythonProtocol.MSG_STATUS, PythonProtocol.MSG_DATA_RESULT, PythonProtocol.MSG_DATA_ACK, PythonProtocol.MSG_INTROSPECT_RESULT:
 			message_received.emit(instance_name, parsed)
 		_:
 			print("[Python][%s] unknown message: %s" % [instance_name, JSON.stringify(msg)])

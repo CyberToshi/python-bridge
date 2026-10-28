@@ -12,7 +12,7 @@ Beobachtung, damit du sofort erkennst, welche Stelle problematisch ist.
 
 Der Python-Kern des Addons ist durch eine Testsuite abgedeckt (205 Tests,
 0 skipped, sobald `numpy`, `pandas` und `scipy` in der Testumgebung liegen).
-Die GDScript-Seite ist durch **384 Unit-Assertions in acht Suites** abgedeckt,
+Die GDScript-Seite ist durch **391 Unit-Assertions in neun Suites** abgedeckt,
 und der komplette End-to-End-Weg (Godot → Python-Prozess → WebSocket → Task →
 Ergebnis) wurde headless mit Godot 4.7 verifiziert. Zusätzlich laufen 24
 Prüfpunkte in einer echten Pyodide-Runtime und 9 Live-Cython-Checks gegen
@@ -28,7 +28,7 @@ einem Update zu prüfen, dass noch alles funktioniert:
 # 1) Skripte kompilieren fehlerfrei? (leerer Output = gut)
 flatpak run org.godotengine.Godot --headless --editor --quit --path <PROJEKT> 2>&1 | grep -E "SCRIPT ERROR|Parse Error"
 
-# 2) GDScript-Unit-Suites (8 Suiten, 384 Assertions)
+# 2) GDScript-Unit-Suites (9 Suiten, 391 Assertions)
 flatpak run org.godotengine.Godot --headless --path <PROJEKT> --script res://tests/gdscript/run_tests.gd
 
 # 3) Autoload + Dock + Plugin-Status
@@ -41,7 +41,7 @@ flatpak run org.godotengine.Godot --headless --path <PROJEKT> --script res://tes
 Bei einer nativen Godot-Installation ersetzt du `flatpak run
 org.godotengine.Godot` einfach durch deinen `godot`-Befehl.
 
-Erwartete Ausgaben: `TOTAL: 384 passed, 0 failed`,
+Erwartete Ausgaben: `TOTAL: 391 passed, 0 failed`,
 `[VERIFY] RESULT: PASS` und `[E2E] PASS`.
 
 ## Data-Plane-Verifikation (P1)
