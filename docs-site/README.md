@@ -42,9 +42,17 @@ The site is published to GitHub Pages as a project page:
 - `organizationName`: `CyberToshi`
 - `projectName`: `python-bridge`
 
-Deployment happens automatically via GitHub Actions (see
-`.github/workflows/deploy-docs.yml` in the repository root). The built site
-is served at `https://cybertoshi.github.io/python-bridge/`.
+Deployment is a local command — there is **no** GitHub Actions workflow for
+this repository:
+
+```bash
+GIT_USER=CyberToshi USE_SSH=false npm run deploy
+```
+
+Docusaurus builds the site and pushes the result to the `gh-pages` branch,
+which GitHub Pages serves at `https://cybertoshi.github.io/python-bridge/`.
+Run `npm run build` first if you want to see broken links fail locally
+(`onBrokenLinks: 'throw'`).
 
 ## Documentation source
 
